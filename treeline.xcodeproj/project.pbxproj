@@ -1,0 +1,554 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXContainerItemProxy section */
+		099FA8872FAEC4E600797DD8 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 099FA86D2FAEC4E400797DD8 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 099FA8742FAEC4E400797DD8;
+			remoteInfo = treeline;
+		};
+		099FA8912FAEC4E600797DD8 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 099FA86D2FAEC4E400797DD8 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 099FA8742FAEC4E400797DD8;
+			remoteInfo = treeline;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		099FA8752FAEC4E400797DD8 /* treeline.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = treeline.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		099FA8862FAEC4E600797DD8 /* treelineTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = treelineTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		099FA8902FAEC4E600797DD8 /* treelineUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = treelineUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		099FA8772FAEC4E400797DD8 /* treeline */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = treeline;
+			sourceTree = "<group>";
+		};
+		099FA8892FAEC4E600797DD8 /* treelineTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = treelineTests;
+			sourceTree = "<group>";
+		};
+		099FA8932FAEC4E600797DD8 /* treelineUITests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = treelineUITests;
+			sourceTree = "<group>";
+		};
+/* End PBXFileSystemSynchronizedRootGroup section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		099FA8722FAEC4E400797DD8 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		099FA8832FAEC4E600797DD8 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		099FA88D2FAEC4E600797DD8 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		099FA86C2FAEC4E400797DD8 = {
+			isa = PBXGroup;
+			children = (
+				099FA8772FAEC4E400797DD8 /* treeline */,
+				099FA8892FAEC4E600797DD8 /* treelineTests */,
+				099FA8932FAEC4E600797DD8 /* treelineUITests */,
+				099FA8762FAEC4E400797DD8 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		099FA8762FAEC4E400797DD8 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				099FA8752FAEC4E400797DD8 /* treeline.app */,
+				099FA8862FAEC4E600797DD8 /* treelineTests.xctest */,
+				099FA8902FAEC4E600797DD8 /* treelineUITests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		099FA8742FAEC4E400797DD8 /* treeline */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 099FA89A2FAEC4E600797DD8 /* Build configuration list for PBXNativeTarget "treeline" */;
+			buildPhases = (
+				099FA8712FAEC4E400797DD8 /* Sources */,
+				099FA8722FAEC4E400797DD8 /* Frameworks */,
+				099FA8732FAEC4E400797DD8 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				099FA8772FAEC4E400797DD8 /* treeline */,
+			);
+			name = treeline;
+			packageProductDependencies = (
+			);
+			productName = treeline;
+			productReference = 099FA8752FAEC4E400797DD8 /* treeline.app */;
+			productType = "com.apple.product-type.application";
+		};
+		099FA8852FAEC4E600797DD8 /* treelineTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 099FA89D2FAEC4E600797DD8 /* Build configuration list for PBXNativeTarget "treelineTests" */;
+			buildPhases = (
+				099FA8822FAEC4E600797DD8 /* Sources */,
+				099FA8832FAEC4E600797DD8 /* Frameworks */,
+				099FA8842FAEC4E600797DD8 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				099FA8882FAEC4E600797DD8 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				099FA8892FAEC4E600797DD8 /* treelineTests */,
+			);
+			name = treelineTests;
+			packageProductDependencies = (
+			);
+			productName = treelineTests;
+			productReference = 099FA8862FAEC4E600797DD8 /* treelineTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		099FA88F2FAEC4E600797DD8 /* treelineUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 099FA8A02FAEC4E600797DD8 /* Build configuration list for PBXNativeTarget "treelineUITests" */;
+			buildPhases = (
+				099FA88C2FAEC4E600797DD8 /* Sources */,
+				099FA88D2FAEC4E600797DD8 /* Frameworks */,
+				099FA88E2FAEC4E600797DD8 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				099FA8922FAEC4E600797DD8 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				099FA8932FAEC4E600797DD8 /* treelineUITests */,
+			);
+			name = treelineUITests;
+			packageProductDependencies = (
+			);
+			productName = treelineUITests;
+			productReference = 099FA8902FAEC4E600797DD8 /* treelineUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		099FA86D2FAEC4E400797DD8 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1620;
+				LastUpgradeCheck = 1620;
+				TargetAttributes = {
+					099FA8742FAEC4E400797DD8 = {
+						CreatedOnToolsVersion = 16.2;
+					};
+					099FA8852FAEC4E600797DD8 = {
+						CreatedOnToolsVersion = 16.2;
+						TestTargetID = 099FA8742FAEC4E400797DD8;
+					};
+					099FA88F2FAEC4E600797DD8 = {
+						CreatedOnToolsVersion = 16.2;
+						TestTargetID = 099FA8742FAEC4E400797DD8;
+					};
+				};
+			};
+			buildConfigurationList = 099FA8702FAEC4E400797DD8 /* Build configuration list for PBXProject "treeline" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = 099FA86C2FAEC4E400797DD8;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 099FA8762FAEC4E400797DD8 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				099FA8742FAEC4E400797DD8 /* treeline */,
+				099FA8852FAEC4E600797DD8 /* treelineTests */,
+				099FA88F2FAEC4E600797DD8 /* treelineUITests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		099FA8732FAEC4E400797DD8 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		099FA8842FAEC4E600797DD8 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		099FA88E2FAEC4E600797DD8 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		099FA8712FAEC4E400797DD8 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		099FA8822FAEC4E600797DD8 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		099FA88C2FAEC4E600797DD8 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		099FA8882FAEC4E600797DD8 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 099FA8742FAEC4E400797DD8 /* treeline */;
+			targetProxy = 099FA8872FAEC4E600797DD8 /* PBXContainerItemProxy */;
+		};
+		099FA8922FAEC4E600797DD8 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 099FA8742FAEC4E400797DD8 /* treeline */;
+			targetProxy = 099FA8912FAEC4E600797DD8 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		099FA8982FAEC4E600797DD8 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 15.2;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		099FA8992FAEC4E600797DD8 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 15.2;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+			};
+			name = Release;
+		};
+		099FA89B2FAEC4E600797DD8 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = treeline/treeline.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_ASSET_PATHS = "\"treeline/Preview Content\"";
+				DEVELOPMENT_TEAM = FG7KHG9L25;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = keasoftware.treeline;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		099FA89C2FAEC4E600797DD8 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = treeline/treeline.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_ASSET_PATHS = "\"treeline/Preview Content\"";
+				DEVELOPMENT_TEAM = FG7KHG9L25;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = keasoftware.treeline;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		099FA89E2FAEC4E600797DD8 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = FG7KHG9L25;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 15.2;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = keasoftware.treelineTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/treeline.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/treeline";
+			};
+			name = Debug;
+		};
+		099FA89F2FAEC4E600797DD8 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = FG7KHG9L25;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 15.2;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = keasoftware.treelineTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/treeline.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/treeline";
+			};
+			name = Release;
+		};
+		099FA8A12FAEC4E600797DD8 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = FG7KHG9L25;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = keasoftware.treelineUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TEST_TARGET_NAME = treeline;
+			};
+			name = Debug;
+		};
+		099FA8A22FAEC4E600797DD8 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = FG7KHG9L25;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = keasoftware.treelineUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TEST_TARGET_NAME = treeline;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		099FA8702FAEC4E400797DD8 /* Build configuration list for PBXProject "treeline" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				099FA8982FAEC4E600797DD8 /* Debug */,
+				099FA8992FAEC4E600797DD8 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		099FA89A2FAEC4E600797DD8 /* Build configuration list for PBXNativeTarget "treeline" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				099FA89B2FAEC4E600797DD8 /* Debug */,
+				099FA89C2FAEC4E600797DD8 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		099FA89D2FAEC4E600797DD8 /* Build configuration list for PBXNativeTarget "treelineTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				099FA89E2FAEC4E600797DD8 /* Debug */,
+				099FA89F2FAEC4E600797DD8 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		099FA8A02FAEC4E600797DD8 /* Build configuration list for PBXNativeTarget "treelineUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				099FA8A12FAEC4E600797DD8 /* Debug */,
+				099FA8A22FAEC4E600797DD8 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 099FA86D2FAEC4E400797DD8 /* Project object */;
+}
