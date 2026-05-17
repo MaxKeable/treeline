@@ -13,6 +13,10 @@ import Foundation
 final class ProjectsDashboardState {
     private(set) var projects: [Project]
     private(set) var activeProjectID: String?
+    /// Health per Project ID, populated lazily by `refreshHealth`. Projects
+    /// with no entry are treated as `.loading` by `health(for:)` so the
+    /// dashboard can render before the first refresh completes.
+    private(set) var healthByProjectID: [String: ProjectHealth] = [:]
     var lastAddError: String?
     /// Transient message shown when a selected path was attached to an
     /// existing Project rather than creating a new one. The view surfaces
@@ -21,16 +25,19 @@ final class ProjectsDashboardState {
 
     private let store: ProjectStore?
     private let gitClient: GitClient?
+    private let healthRefresher: ProjectHealthRefresher?
 
     init(
         projects: [Project] = [],
         activeProjectID: String? = nil,
         store: ProjectStore? = nil,
-        gitClient: GitClient? = nil
+        gitClient: GitClient? = nil,
+        healthRefresher: ProjectHealthRefresher? = nil
     ) {
         self.projects = projects
         self.store = store
         self.gitClient = gitClient
+        self.healthRefresher = healthRefresher
         // Drop a dangling reference so callers never see an "active" project
         // that isn't in the projects list (e.g. the repo was removed between
         // launches).
@@ -49,8 +56,51 @@ final class ProjectsDashboardState {
             projects: persisted.projects,
             activeProjectID: persisted.lastActiveProjectID,
             store: store,
-            gitClient: gitClient
+            gitClient: gitClient,
+            healthRefresher: ProjectHealthRefresher(gitClient: gitClient)
         )
+    }
+
+    /// Health for a Project. Returns `.loading` if no refresh has completed
+    /// yet so the dashboard never has to special-case "missing entry".
+    func health(for project: Project) -> ProjectHealth {
+        healthByProjectID[project.id] ?? .loading
+    }
+
+    /// Refresh one Project's health without touching any other Project's
+    /// state. The Project's row flips to `.loading` while the probe runs and
+    /// the result is dropped if the Project was removed mid-refresh.
+    func refreshHealth(for project: Project) async {
+        guard let healthRefresher else { return }
+        guard projects.contains(where: { $0.id == project.id }) else { return }
+        if healthByProjectID[project.id] == nil {
+            healthByProjectID[project.id] = .loading
+        }
+        let updated = await healthRefresher.refresh(project)
+        guard projects.contains(where: { $0.id == project.id }) else { return }
+        healthByProjectID[project.id] = updated
+    }
+
+    /// Refresh every Project's health. Errors on one Project never affect
+    /// the others — each refresh resolves to either ready or degraded health.
+    func refreshAllHealth() async {
+        let snapshot = projects
+        await withTaskGroup(of: (String, ProjectHealth).self) { group in
+            guard let healthRefresher else { return }
+            for project in snapshot {
+                if healthByProjectID[project.id] == nil {
+                    healthByProjectID[project.id] = .loading
+                }
+                group.addTask {
+                    (project.id, await healthRefresher.refresh(project))
+                }
+            }
+            for await (id, health) in group {
+                if projects.contains(where: { $0.id == id }) {
+                    healthByProjectID[id] = health
+                }
+            }
+        }
     }
 
     var isEmpty: Bool { projects.isEmpty }

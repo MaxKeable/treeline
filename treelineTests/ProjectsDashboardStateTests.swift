@@ -370,6 +370,132 @@ struct ProjectsDashboardStateTests {
         #expect(added.checkoutPaths == ["/Users/dev/acme"])
     }
 
+    @Test func healthDefaultsToLoadingBeforeAnyRefresh() {
+        let project = Project(
+            commonDirectoryPath: "/Users/dev/acme/.git",
+            primaryCheckoutPath: "/Users/dev/acme",
+            displayName: "acme"
+        )
+        let state = ProjectsDashboardState(projects: [project])
+        // No refresher and no entry yet — the dashboard sees the loading
+        // sentinel so it can render the row without special-casing missing
+        // health.
+        #expect(state.health(for: project) == .loading)
+    }
+
+    @Test func refreshHealthUpdatesOneProjectWithoutTouchingOthers() async throws {
+        let fm = FileManager.default
+        let checkoutA = fm.temporaryDirectory.appendingPathComponent("treeline-health-a-\(UUID().uuidString)")
+        let checkoutB = fm.temporaryDirectory.appendingPathComponent("treeline-health-b-\(UUID().uuidString)")
+        try fm.createDirectory(at: checkoutA, withIntermediateDirectories: true)
+        try fm.createDirectory(at: checkoutB, withIntermediateDirectories: true)
+        defer {
+            try? fm.removeItem(at: checkoutA)
+            try? fm.removeItem(at: checkoutB)
+        }
+
+        let projectA = Project(
+            commonDirectoryPath: checkoutA.path + "/.git",
+            primaryCheckoutPath: checkoutA.path,
+            displayName: "acme"
+        )
+        let projectB = Project(
+            commonDirectoryPath: checkoutB.path + "/.git",
+            primaryCheckoutPath: checkoutB.path,
+            displayName: "widgets"
+        )
+
+        let runner = FakeCLIRunner()
+        runner.stub(arguments: ["rev-parse", "--abbrev-ref", "HEAD"], stdout: "main\n")
+        runner.stub(arguments: ["status", "--porcelain"], stdout: "")
+        runner.stub(arguments: ["worktree", "list", "--porcelain"], stdout: "")
+
+        let state = ProjectsDashboardState(
+            projects: [projectA, projectB],
+            gitClient: GitClient(runner: runner),
+            healthRefresher: ProjectHealthRefresher(gitClient: GitClient(runner: runner))
+        )
+
+        await state.refreshHealth(for: projectA)
+
+        // A flips to ready; B stays untouched (still .loading default).
+        #expect(state.health(for: projectA).status == .ready)
+        #expect(state.health(for: projectB) == .loading)
+    }
+
+    @Test func refreshAllHealthHandlesMixOfReadyAndDegradedProjects() async throws {
+        let fm = FileManager.default
+        let liveCheckout = fm.temporaryDirectory.appendingPathComponent("treeline-live-\(UUID().uuidString)")
+        try fm.createDirectory(at: liveCheckout, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: liveCheckout) }
+
+        let live = Project(
+            commonDirectoryPath: liveCheckout.path + "/.git",
+            primaryCheckoutPath: liveCheckout.path,
+            displayName: "live"
+        )
+        let gone = Project(
+            commonDirectoryPath: "/Users/dev/missing/.git",
+            primaryCheckoutPath: "/Users/dev/definitely-missing-\(UUID().uuidString)",
+            displayName: "gone"
+        )
+
+        let runner = FakeCLIRunner()
+        runner.stub(arguments: ["rev-parse", "--abbrev-ref", "HEAD"], stdout: "main\n")
+        runner.stub(arguments: ["status", "--porcelain"], stdout: " M foo\n")
+        runner.stub(arguments: ["worktree", "list", "--porcelain"], stdout: "")
+
+        let state = ProjectsDashboardState(
+            projects: [live, gone],
+            gitClient: GitClient(runner: runner),
+            healthRefresher: ProjectHealthRefresher(gitClient: GitClient(runner: runner))
+        )
+
+        await state.refreshAllHealth()
+
+        #expect(state.health(for: live).status == .ready)
+        #expect(state.health(for: live).workingTree == .dirty)
+        if case .degraded = state.health(for: gone).status {
+            // expected
+        } else {
+            Issue.record("expected gone Project to be degraded")
+        }
+    }
+
+    @Test func refreshHealthIgnoresProjectRemovedMidFlight() async throws {
+        // Refresh result for a Project the user has just deleted must not be
+        // written back — otherwise the dashboard would resurrect stale state
+        // keyed under an absent Project.
+        let fm = FileManager.default
+        let checkout = fm.temporaryDirectory.appendingPathComponent("treeline-removed-\(UUID().uuidString)")
+        try fm.createDirectory(at: checkout, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: checkout) }
+
+        let project = Project(
+            commonDirectoryPath: checkout.path + "/.git",
+            primaryCheckoutPath: checkout.path,
+            displayName: "acme"
+        )
+
+        let runner = FakeCLIRunner()
+        runner.stub(arguments: ["rev-parse", "--abbrev-ref", "HEAD"], stdout: "main\n")
+        runner.stub(arguments: ["status", "--porcelain"], stdout: "")
+        runner.stub(arguments: ["worktree", "list", "--porcelain"], stdout: "")
+
+        // Construct the state *without* the project so the post-refresh
+        // membership check filters the result out, simulating "removed
+        // mid-flight". This avoids needing a hook in the refresher.
+        let state = ProjectsDashboardState(
+            projects: [],
+            gitClient: GitClient(runner: runner),
+            healthRefresher: ProjectHealthRefresher(gitClient: GitClient(runner: runner))
+        )
+
+        await state.refreshHealth(for: project)
+
+        #expect(state.healthByProjectID[project.id] == nil)
+    }
+
     @Test func addProjectSurfacesGitErrors() async throws {
         let runner = FakeCLIRunner()
         runner.stubFailure(

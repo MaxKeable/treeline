@@ -42,6 +42,38 @@ struct GitClient: Sendable {
         )
     }
 
+    /// Run `git rev-parse --abbrev-ref HEAD` and return the current branch
+    /// name, or `nil` if HEAD is detached. Cheap enough for the dashboard.
+    func currentBranch(at selectedPath: URL) async throws -> String? {
+        let workingDirectory = try directoryForExecution(at: selectedPath)
+        let trimmed = try await revParse(["--abbrev-ref", "HEAD"], workingDirectory: workingDirectory)
+        // `--abbrev-ref HEAD` prints the literal string "HEAD" when HEAD is
+        // detached. Treat that as "no branch" rather than a real branch name.
+        return trimmed == "HEAD" ? nil : trimmed
+    }
+
+    /// Run `git status --porcelain` and return whether the working tree has
+    /// any modifications, including untracked files. The porcelain format
+    /// keeps this cheap and stable across git versions.
+    func isWorkingTreeDirty(at selectedPath: URL) async throws -> Bool {
+        let workingDirectory = try directoryForExecution(at: selectedPath)
+        let invocation = CLIInvocation(
+            executableURL: gitExecutableURL,
+            arguments: ["status", "--porcelain"],
+            workingDirectory: workingDirectory
+        )
+        do {
+            let result = try await runner.run(invocation)
+            let trimmed = result.standardOutput.trimmingCharacters(in: .whitespacesAndNewlines)
+            return !trimmed.isEmpty
+        } catch let CLIError.nonZeroExit(_, stderr, _) {
+            throw GitClientError.notInsideRepository(
+                path: workingDirectory.path,
+                underlying: stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+            )
+        }
+    }
+
     /// Run `git worktree list --porcelain` from a path inside the repository
     /// and return every checkout/worktree git knows about, canonicalized.
     /// Bare repos (which show up as a `bare` flag with no working tree path)

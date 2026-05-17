@@ -2,35 +2,153 @@ import SwiftUI
 
 struct ProjectRowView: View {
     let project: Project
+    let health: ProjectHealth
 
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(alignment: .top, spacing: 12) {
             Image(systemName: "folder.fill")
                 .foregroundStyle(.tint)
                 .font(.title3)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(project.displayName)
-                    .font(.headline)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 8) {
+                    Text(project.displayName)
+                        .font(.headline)
+                    if case .degraded(let reason) = health.status {
+                        Label("Degraded", systemImage: "exclamationmark.triangle.fill")
+                            .labelStyle(.iconOnly)
+                            .foregroundStyle(.orange)
+                            .help(reason)
+                            .accessibilityLabel(Text("Degraded: \(reason)"))
+                    }
+                }
                 Text(project.primaryCheckoutPath)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
+                healthRow
             }
-            Spacer()
+            Spacer(minLength: 0)
         }
         .padding(.vertical, 4)
         .contentShape(Rectangle())
     }
+
+    @ViewBuilder
+    private var healthRow: some View {
+        switch health.status {
+        case .loading where health.lastRefreshedAt == nil:
+            HStack(spacing: 6) {
+                ProgressView()
+                    .controlSize(.small)
+                Text("Loading health…")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        case .degraded(let reason):
+            Text(reason)
+                .font(.caption2)
+                .foregroundStyle(.orange)
+                .lineLimit(2)
+        default:
+            HStack(spacing: 12) {
+                branchLabel
+                workingTreeLabel
+                worktreeCountLabel
+                refreshedAtLabel
+            }
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder
+    private var branchLabel: some View {
+        if let branch = health.currentBranch {
+            Label(branch, systemImage: "arrow.triangle.branch")
+                .lineLimit(1)
+        } else if health.status == .ready {
+            // Ready but no branch name → detached HEAD.
+            Label("detached", systemImage: "arrow.triangle.branch")
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder
+    private var workingTreeLabel: some View {
+        switch health.workingTree {
+        case .clean:
+            Label("clean", systemImage: "checkmark.circle")
+                .foregroundStyle(.green)
+        case .dirty:
+            Label("dirty", systemImage: "pencil.circle.fill")
+                .foregroundStyle(.orange)
+        case .none:
+            EmptyView()
+        }
+    }
+
+    @ViewBuilder
+    private var worktreeCountLabel: some View {
+        if let count = health.worktreeCount {
+            Label("\(count)", systemImage: "rectangle.stack")
+                .accessibilityLabel(Text("\(count) worktrees"))
+        }
+    }
+
+    @ViewBuilder
+    private var refreshedAtLabel: some View {
+        if let date = health.lastRefreshedAt {
+            Text(date, format: .relative(presentation: .named))
+                .accessibilityLabel(Text("Last refreshed \(date.formatted(.relative(presentation: .named)))"))
+        }
+    }
 }
 
-#Preview {
+#Preview("Ready") {
     ProjectRowView(
         project: Project(
             commonDirectoryPath: "/Users/maxkeable/kea-software/my-tools/treeline/.git",
             primaryCheckoutPath: "/Users/maxkeable/kea-software/my-tools/treeline",
             displayName: "treeline"
+        ),
+        health: ProjectHealth(
+            status: .ready,
+            currentBranch: "main",
+            workingTree: .clean,
+            worktreeCount: 2,
+            lastRefreshedAt: Date()
         )
+    )
+    .padding()
+}
+
+#Preview("Degraded") {
+    ProjectRowView(
+        project: Project(
+            commonDirectoryPath: "/Users/maxkeable/gone/.git",
+            primaryCheckoutPath: "/Users/maxkeable/gone",
+            displayName: "gone"
+        ),
+        health: ProjectHealth(
+            status: .degraded(reason: "Primary checkout is missing or no longer a directory"),
+            currentBranch: nil,
+            workingTree: nil,
+            worktreeCount: nil,
+            lastRefreshedAt: Date()
+        )
+    )
+    .padding()
+}
+
+#Preview("Loading") {
+    ProjectRowView(
+        project: Project(
+            commonDirectoryPath: "/x/.git",
+            primaryCheckoutPath: "/x",
+            displayName: "x"
+        ),
+        health: .loading
     )
     .padding()
 }
