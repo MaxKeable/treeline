@@ -40,6 +40,20 @@ struct ProjectsDashboardView: View {
                     Label("Add Project", systemImage: "plus")
                 }
             }
+            ToolbarItem(placement: .secondaryAction) {
+                Button {
+                    Task { await state.refreshAllHealth() }
+                } label: {
+                    Label("Refresh", systemImage: "arrow.clockwise")
+                }
+                .disabled(state.isEmpty)
+                .help("Refresh local health for every Project")
+            }
+        }
+        .task {
+            // Initial refresh on dashboard appear. Each Project resolves
+            // independently — one failing repo never blocks the others.
+            await state.refreshAllHealth()
         }
         .alert(
             "Couldn't add Project",
@@ -109,7 +123,12 @@ struct ProjectsDashboardView: View {
     private var projectList: some View {
         List(state.projects) { project in
             NavigationLink(value: project) {
-                ProjectRowView(project: project)
+                ProjectRowView(project: project, health: state.health(for: project))
+            }
+            .contextMenu {
+                Button("Refresh Health") {
+                    Task { await state.refreshHealth(for: project) }
+                }
             }
         }
     }

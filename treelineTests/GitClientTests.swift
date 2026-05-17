@@ -168,6 +168,64 @@ struct GitClientTests {
         }
     }
 
+    @Test func currentBranchReturnsBranchName() async throws {
+        let runner = FakeCLIRunner()
+        runner.stub(arguments: ["rev-parse", "--abbrev-ref", "HEAD"], stdout: "main\n")
+
+        let client = GitClient(runner: runner)
+        let branch = try await client.currentBranch(at: URL(fileURLWithPath: "/Users/dev/acme"))
+        #expect(branch == "main")
+    }
+
+    @Test func currentBranchReturnsNilOnDetachedHead() async throws {
+        // `git rev-parse --abbrev-ref HEAD` prints the literal string "HEAD"
+        // when HEAD is detached, which we surface as nil.
+        let runner = FakeCLIRunner()
+        runner.stub(arguments: ["rev-parse", "--abbrev-ref", "HEAD"], stdout: "HEAD\n")
+
+        let client = GitClient(runner: runner)
+        let branch = try await client.currentBranch(at: URL(fileURLWithPath: "/Users/dev/acme"))
+        #expect(branch == nil)
+    }
+
+    @Test func isWorkingTreeDirtyTrueWhenPorcelainNonEmpty() async throws {
+        let runner = FakeCLIRunner()
+        runner.stub(arguments: ["status", "--porcelain"], stdout: " M src/foo.swift\n?? new.swift\n")
+
+        let client = GitClient(runner: runner)
+        let dirty = try await client.isWorkingTreeDirty(at: URL(fileURLWithPath: "/Users/dev/acme"))
+        #expect(dirty)
+    }
+
+    @Test func isWorkingTreeDirtyFalseWhenPorcelainEmpty() async throws {
+        let runner = FakeCLIRunner()
+        runner.stub(arguments: ["status", "--porcelain"], stdout: "")
+
+        let client = GitClient(runner: runner)
+        let dirty = try await client.isWorkingTreeDirty(at: URL(fileURLWithPath: "/Users/dev/acme"))
+        #expect(!dirty)
+    }
+
+    @Test func isWorkingTreeDirtySurfacesCLIErrorsAsNotInsideRepository() async throws {
+        let runner = FakeCLIRunner()
+        runner.stubFailure(
+            arguments: ["status", "--porcelain"],
+            error: .nonZeroExit(
+                status: 128,
+                standardError: "fatal: not a git repository\n",
+                standardOutput: ""
+            )
+        )
+
+        let client = GitClient(runner: runner)
+        do {
+            _ = try await client.isWorkingTreeDirty(at: URL(fileURLWithPath: "/tmp"))
+            Issue.record("expected notInsideRepository error")
+        } catch let GitClientError.notInsideRepository(_, underlying) {
+            #expect(underlying.contains("not a git repository"))
+        }
+    }
+
     @Test func relativeCommonDirIsResolvedAgainstWorkingDirectory() async throws {
         let fm = FileManager.default
         let checkout = fm.temporaryDirectory.appendingPathComponent("treeline-relcommon-\(UUID().uuidString)")
