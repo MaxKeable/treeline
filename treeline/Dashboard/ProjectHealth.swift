@@ -20,6 +20,11 @@ struct ProjectHealth: Equatable, Sendable {
         case loading
         case ready
         case degraded(reason: String)
+        /// The Project's primary checkout path no longer points at a directory
+        /// (folder moved, drive disconnected, etc.). Distinct from `.degraded`
+        /// so the dashboard can offer Relocate / Remove instead of suggesting
+        /// the repo itself is sick.
+        case missing
     }
 
     var status: Status

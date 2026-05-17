@@ -455,11 +455,7 @@ struct ProjectsDashboardStateTests {
 
         #expect(state.health(for: live).status == .ready)
         #expect(state.health(for: live).workingTree == .dirty)
-        if case .degraded = state.health(for: gone).status {
-            // expected
-        } else {
-            Issue.record("expected gone Project to be degraded")
-        }
+        #expect(state.health(for: gone).status == .missing)
     }
 
     @Test func refreshHealthIgnoresProjectRemovedMidFlight() async throws {
@@ -643,9 +639,9 @@ struct ProjectsDashboardStateTests {
         #expect(state.isStale(for: project))
     }
 
-    @Test func isStaleAppliesToDegradedSnapshotsToo() async throws {
-        // Failure rows can also go stale — the user should know that the
-        // "Couldn't reach git" message hasn't been re-checked in a while.
+    @Test func isStaleAppliesToMissingSnapshotsToo() async throws {
+        // Missing rows can also go stale — the user should know that the
+        // "folder no longer exists" message hasn't been re-checked in a while.
         let project = Project(
             commonDirectoryPath: "/Users/dev/gone/.git",
             primaryCheckoutPath: "/Users/dev/definitely-missing-\(UUID().uuidString)",
@@ -664,11 +660,7 @@ struct ProjectsDashboardStateTests {
         )
 
         await state.refreshHealth(for: project)
-        if case .degraded = state.health(for: project).status {
-            // expected
-        } else {
-            Issue.record("expected degraded status, got \(state.health(for: project).status)")
-        }
+        #expect(state.health(for: project).status == .missing)
         #expect(!state.isStale(for: project))
 
         clock.advance(by: 120)
@@ -757,6 +749,240 @@ struct ProjectsDashboardStateTests {
         for project in projects {
             #expect(state.health(for: project).status == .ready)
         }
+    }
+
+    @Test func missingProjectStillLoadsFromStoreAndShowsMissingStatus() async throws {
+        // Acceptance: persisted Projects with missing primary checkout paths
+        // still appear on the dashboard, and they avoid running normal git
+        // health checks against the unavailable path.
+        let fm = FileManager.default
+        let storeURL = fm.temporaryDirectory
+            .appendingPathComponent("treeline-missing-load-\(UUID().uuidString)")
+            .appendingPathComponent("projects.json")
+        defer { try? fm.removeItem(at: storeURL.deletingLastPathComponent()) }
+
+        let missingPath = "/Users/dev/definitely-not-a-real-path-\(UUID().uuidString)"
+        let project = Project(
+            commonDirectoryPath: "/Users/dev/gone/.git",
+            primaryCheckoutPath: missingPath,
+            displayName: "gone"
+        )
+        try ProjectStore(fileURL: storeURL).save(PersistedProjectState(projects: [project]))
+
+        let runner = FakeCLIRunner()
+        // Deliberately no stubs — if the refresher reaches git the runner
+        // throws and the test fails, proving we skipped git for missing paths.
+        let state = ProjectsDashboardState(
+            store: ProjectStore(fileURL: storeURL),
+            gitClient: GitClient(runner: runner)
+        )
+
+        #expect(state.projects == [project])
+        await state.refreshAllHealth()
+
+        #expect(state.health(for: project).status == .missing)
+        #expect(runner.invocations.isEmpty)
+    }
+
+    @Test func relocateUpdatesPrimaryCheckoutAndPersistsWithoutLosingState() async throws {
+        let fm = FileManager.default
+        let storeURL = fm.temporaryDirectory
+            .appendingPathComponent("treeline-relocate-ok-\(UUID().uuidString)")
+            .appendingPathComponent("projects.json")
+        defer { try? fm.removeItem(at: storeURL.deletingLastPathComponent()) }
+
+        let unrelated = Project(
+            commonDirectoryPath: "/Users/dev/widgets/.git",
+            primaryCheckoutPath: "/Users/dev/widgets",
+            displayName: "widgets"
+        )
+        let missing = Project(
+            commonDirectoryPath: "/Users/dev/acme/.git",
+            primaryCheckoutPath: "/Users/dev/old-acme",
+            displayName: "acme",
+            checkoutPaths: ["/Users/dev/old-acme", "/Users/dev/old-acme-wt"]
+        )
+        try ProjectStore(fileURL: storeURL).save(
+            PersistedProjectState(projects: [unrelated, missing])
+        )
+
+        let runner = FakeCLIRunner()
+        runner.stub(arguments: ["rev-parse", "--show-toplevel"], stdout: "/Users/dev/acme\n")
+        runner.stub(arguments: ["rev-parse", "--git-common-dir"], stdout: "/Users/dev/acme/.git\n")
+        runner.stub(arguments: ["worktree", "list", "--porcelain"], stdout: "")
+
+        let state = ProjectsDashboardState(
+            store: ProjectStore(fileURL: storeURL),
+            gitClient: GitClient(runner: runner)
+        )
+
+        let updated = try await state.relocateProject(
+            missing,
+            to: URL(fileURLWithPath: "/Users/dev/acme")
+        )
+
+        #expect(updated.id == missing.id)
+        #expect(updated.displayName == "acme")
+        #expect(updated.primaryCheckoutPath == "/Users/dev/acme")
+        // Unrelated Project survives intact.
+        #expect(state.projects.contains(unrelated))
+        #expect(state.projects.count == 2)
+
+        let reloaded = ProjectStore(fileURL: storeURL).load()
+        #expect(reloaded.projects.contains(unrelated))
+        let relocated = reloaded.projects.first { $0.id == missing.id }
+        #expect(relocated?.primaryCheckoutPath == "/Users/dev/acme")
+    }
+
+    @Test func relocateSurfacesMismatchWhenNewPathBelongsToAnotherTrackedProject() async throws {
+        let occupied = Project(
+            commonDirectoryPath: "/Users/dev/widgets/.git",
+            primaryCheckoutPath: "/Users/dev/widgets",
+            displayName: "widgets"
+        )
+        let missing = Project(
+            commonDirectoryPath: "/Users/dev/acme/.git",
+            primaryCheckoutPath: "/Users/dev/old-acme",
+            displayName: "acme"
+        )
+
+        let runner = FakeCLIRunner()
+        // The folder the user picked actually belongs to the widgets repo.
+        runner.stub(arguments: ["rev-parse", "--show-toplevel"], stdout: "/Users/dev/widgets\n")
+        runner.stub(arguments: ["rev-parse", "--git-common-dir"], stdout: "/Users/dev/widgets/.git\n")
+
+        let state = ProjectsDashboardState(
+            projects: [occupied, missing],
+            gitClient: GitClient(runner: runner)
+        )
+
+        do {
+            _ = try await state.relocateProject(
+                missing,
+                to: URL(fileURLWithPath: "/Users/dev/widgets")
+            )
+            Issue.record("expected repositoryMismatch error")
+        } catch ProjectsDashboardState.RelocateProjectError.repositoryMismatch {
+            // expected
+        }
+
+        // Both Projects survive untouched — no state corruption from the
+        // rejected relocate.
+        #expect(state.projects == [occupied, missing])
+    }
+
+    @Test func relocateRejectsInvalidPath() async throws {
+        let missing = Project(
+            commonDirectoryPath: "/Users/dev/acme/.git",
+            primaryCheckoutPath: "/Users/dev/old-acme",
+            displayName: "acme"
+        )
+
+        let runner = FakeCLIRunner()
+        runner.stubFailure(
+            arguments: ["rev-parse", "--show-toplevel"],
+            error: .nonZeroExit(
+                status: 128,
+                standardError: "fatal: not a git repository\n",
+                standardOutput: ""
+            )
+        )
+
+        let state = ProjectsDashboardState(
+            projects: [missing],
+            gitClient: GitClient(runner: runner)
+        )
+
+        do {
+            _ = try await state.relocateProject(
+                missing,
+                to: URL(fileURLWithPath: "/tmp")
+            )
+            Issue.record("expected invalidPath error")
+        } catch ProjectsDashboardState.RelocateProjectError.invalidPath(let reason) {
+            #expect(reason.lowercased().contains("git"))
+        }
+
+        // The Project stays in the list and its paths are unchanged so the
+        // user can try again with a different folder.
+        #expect(state.projects == [missing])
+    }
+
+    @Test func relocateAcceptsNewCommonDirAndMigratesIDKeyedState() async throws {
+        // The repository physically moved to a different path on disk, so its
+        // canonical common dir changes. Relocate accepts that and migrates the
+        // health snapshot / active-Project pointer under the new identity.
+        let missing = Project(
+            commonDirectoryPath: "/Users/dev/old-place/.git",
+            primaryCheckoutPath: "/Users/dev/old-place",
+            displayName: "acme"
+        )
+
+        let runner = FakeCLIRunner()
+        runner.stub(arguments: ["rev-parse", "--show-toplevel"], stdout: "/Volumes/Backup/acme\n")
+        runner.stub(arguments: ["rev-parse", "--git-common-dir"], stdout: "/Volumes/Backup/acme/.git\n")
+        runner.stub(arguments: ["worktree", "list", "--porcelain"], stdout: "")
+
+        let state = ProjectsDashboardState(
+            projects: [missing],
+            gitClient: GitClient(runner: runner)
+        )
+        state.setActiveProject(missing)
+        #expect(state.activeProject == missing)
+
+        let updated = try await state.relocateProject(
+            missing,
+            to: URL(fileURLWithPath: "/Volumes/Backup/acme")
+        )
+
+        #expect(updated.id == "/Volumes/Backup/acme/.git")
+        #expect(updated.primaryCheckoutPath == "/Volumes/Backup/acme")
+        #expect(updated.displayName == "acme")
+        #expect(state.projects.count == 1)
+        // Active Project pointer follows the renamed identity.
+        #expect(state.activeProjectID == updated.id)
+    }
+
+    @Test func removeProjectDeletesFromStateAndPersistsRemoval() async throws {
+        let fm = FileManager.default
+        let storeURL = fm.temporaryDirectory
+            .appendingPathComponent("treeline-remove-\(UUID().uuidString)")
+            .appendingPathComponent("projects.json")
+        defer { try? fm.removeItem(at: storeURL.deletingLastPathComponent()) }
+
+        let kept = Project(
+            commonDirectoryPath: "/Users/dev/widgets/.git",
+            primaryCheckoutPath: "/Users/dev/widgets",
+            displayName: "widgets"
+        )
+        let dropped = Project(
+            commonDirectoryPath: "/Users/dev/gone/.git",
+            primaryCheckoutPath: "/Users/dev/gone",
+            displayName: "gone"
+        )
+        try ProjectStore(fileURL: storeURL).save(
+            PersistedProjectState(
+                projects: [kept, dropped],
+                lastActiveProjectID: dropped.id
+            )
+        )
+
+        let state = ProjectsDashboardState(
+            store: ProjectStore(fileURL: storeURL),
+            gitClient: GitClient(runner: FakeCLIRunner())
+        )
+        #expect(state.activeProjectID == dropped.id)
+
+        state.removeProject(dropped)
+
+        #expect(state.projects == [kept])
+        // Active Project pointer was cleared because it pointed at the
+        // Project we just removed.
+        #expect(state.activeProjectID == nil)
+
+        let reloaded = ProjectStore(fileURL: storeURL).load()
+        #expect(reloaded.projects == [kept])
+        #expect(reloaded.lastActiveProjectID == nil)
     }
 
     @Test func addProjectSurfacesGitErrors() async throws {

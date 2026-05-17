@@ -38,6 +38,13 @@ struct ProjectRowView: View {
                             .help(reason)
                             .accessibilityLabel(Text("Degraded: \(reason)"))
                     }
+                    if case .missing = health.status {
+                        Label("Missing", systemImage: "exclamationmark.octagon.fill")
+                            .labelStyle(.iconOnly)
+                            .foregroundStyle(.red)
+                            .help("Primary checkout folder is missing — use Relocate or Remove.")
+                            .accessibilityLabel(Text("Missing primary checkout"))
+                    }
                     gitHubBadge
                 }
                 Text(project.primaryCheckoutPath)
@@ -68,6 +75,11 @@ struct ProjectRowView: View {
             Text(reason)
                 .font(.caption2)
                 .foregroundStyle(.orange)
+                .lineLimit(2)
+        case .missing:
+            Text("Primary checkout folder no longer exists.")
+                .font(.caption2)
+                .foregroundStyle(.red)
                 .lineLimit(2)
         default:
             HStack(spacing: 12) {
@@ -205,7 +217,26 @@ struct ProjectRowView: View {
             displayName: "gone"
         ),
         health: ProjectHealth(
-            status: .degraded(reason: "Primary checkout is missing or no longer a directory"),
+            status: .degraded(reason: "fatal: not a git repository"),
+            currentBranch: nil,
+            workingTree: nil,
+            branchSync: nil,
+            worktreeCount: nil,
+            lastRefreshedAt: Date()
+        )
+    )
+    .padding()
+}
+
+#Preview("Missing") {
+    ProjectRowView(
+        project: Project(
+            commonDirectoryPath: "/Users/maxkeable/moved/.git",
+            primaryCheckoutPath: "/Users/maxkeable/moved",
+            displayName: "moved"
+        ),
+        health: ProjectHealth(
+            status: .missing,
             currentBranch: nil,
             workingTree: nil,
             branchSync: nil,

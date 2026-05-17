@@ -37,6 +37,10 @@ final class ProjectsDashboardState {
     /// the previous snapshot stays visible while the new probe runs.
     private(set) var refreshingProjectIDs: Set<String> = []
     var lastAddError: String?
+    /// User-facing message produced by the most recent failed Relocate. The
+    /// dashboard surfaces it in its own alert so the wording stays specific
+    /// to relocation (mismatched repo, invalid folder, etc.).
+    var lastRelocateError: String?
     /// Transient message shown when a selected path was attached to an
     /// existing Project rather than creating a new one. The view surfaces
     /// this as a non-blocking banner and clears it after a short delay.
@@ -261,6 +265,115 @@ final class ProjectsDashboardState {
 
     enum AddProjectError: Error, Equatable {
         case notConfigured
+    }
+
+    enum RelocateProjectError: Error, Equatable {
+        case notConfigured
+        /// The selected folder isn't inside a git repository at all.
+        case invalidPath(reason: String)
+        /// The selected folder resolves to a repository identity that is
+        /// already tracked under a *different* Project. Merging or replacing
+        /// silently would lose state, so the user has to resolve it
+        /// explicitly (remove the other Project, or pick a different path).
+        case repositoryMismatch(message: String)
+    }
+
+    /// Replace the missing primary checkout with the user-selected folder and
+    /// re-resolve the Project's git identity from there. Other state — display
+    /// name, sibling worktree paths, active-Project membership — is preserved
+    /// so a relocate only "moves" the Project, never resets it.
+    ///
+    /// - When the new path resolves to the same `commonDirectoryPath` we know
+    ///   we're pointing at the same repo on disk (e.g. the user fixed a typo
+    ///   in the symlink); previously discovered checkouts are kept.
+    /// - When the new path resolves to a *different* common directory but no
+    ///   other Project already uses it, we treat that as a successful repair —
+    ///   the repository physically moved — and drop stale sibling paths so we
+    ///   don't keep advertising checkouts that no longer exist.
+    /// - When the new path resolves to a common directory another Project
+    ///   already tracks, we refuse with `.repositoryMismatch` instead of
+    ///   colliding two Projects under the same identity.
+    @discardableResult
+    func relocateProject(_ project: Project, to newPath: URL) async throws -> Project {
+        guard let gitClient else { throw RelocateProjectError.notConfigured }
+        guard let index = projects.firstIndex(where: { $0.id == project.id }) else {
+            return project
+        }
+
+        let identity: GitIdentity
+        do {
+            identity = try await gitClient.resolveIdentity(at: newPath)
+        } catch let GitClientError.notInsideRepository(_, underlying) {
+            let trimmed = underlying.trimmingCharacters(in: .whitespacesAndNewlines)
+            throw RelocateProjectError.invalidPath(
+                reason: trimmed.isEmpty
+                    ? "Selected folder is not inside a git repository."
+                    : trimmed
+            )
+        } catch GitClientError.emptyOutput {
+            throw RelocateProjectError.invalidPath(
+                reason: "git produced no output for the selected folder."
+            )
+        }
+
+        let newCommonDir = identity.commonDirectory.path
+        if newCommonDir != project.commonDirectoryPath,
+           projects.contains(where: { $0.id == newCommonDir }) {
+            throw RelocateProjectError.repositoryMismatch(
+                message: "Another Project already tracks the repository at that folder."
+            )
+        }
+
+        var updated = projects[index]
+        let oldID = updated.id
+        let discovered = (try? await gitClient.listWorktreePaths(at: identity.checkoutRoot)) ?? []
+
+        // Re-derive checkout paths from the new location instead of merging
+        // with the prior list. The previous primary is missing by definition,
+        // and any sibling paths recorded against the old location can't be
+        // trusted to still exist either — git is the authoritative source.
+        var paths = Set<String>()
+        paths.insert(identity.checkoutRoot.path)
+        for url in discovered { paths.insert(url.path) }
+
+        updated.commonDirectoryPath = newCommonDir
+        updated.primaryCheckoutPath = identity.checkoutRoot.path
+        updated.checkoutPaths = paths.sorted()
+        projects[index] = updated
+
+        // Migrate id-keyed bookkeeping if the canonical common dir changed
+        // on disk. We always drop the prior health snapshot so the row re-
+        // probes the new path instead of carrying the "missing" sentinel.
+        if oldID != updated.id {
+            refreshTasks[oldID]?.cancel()
+            refreshTasks.removeValue(forKey: oldID)
+            refreshSeq.removeValue(forKey: oldID)
+            refreshingProjectIDs.remove(oldID)
+            healthByProjectID.removeValue(forKey: oldID)
+            if activeProjectID == oldID { activeProjectID = updated.id }
+        }
+        healthByProjectID.removeValue(forKey: updated.id)
+
+        try persist()
+        return updated
+    }
+
+    /// Drop a Project from in-memory state and persist the removal. Cancels
+    /// any in-flight refresh for that Project and clears the active selection
+    /// if it pointed at the removed Project so navigation doesn't dangle.
+    func removeProject(_ project: Project) {
+        guard let index = projects.firstIndex(where: { $0.id == project.id }) else { return }
+        let projectID = project.id
+        refreshTasks[projectID]?.cancel()
+        refreshTasks.removeValue(forKey: projectID)
+        refreshSeq.removeValue(forKey: projectID)
+        refreshingProjectIDs.remove(projectID)
+        healthByProjectID.removeValue(forKey: projectID)
+        if activeProjectID == projectID {
+            activeProjectID = nil
+        }
+        projects.remove(at: index)
+        try? persist()
     }
 
     private func persist() throws {

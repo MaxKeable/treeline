@@ -36,9 +36,17 @@ struct ProjectHealthRefresher: HealthProbing, Sendable {
             fileManager.fileExists(atPath: primaryURL.path, isDirectory: &isDirectory),
             isDirectory.boolValue
         else {
-            return degraded(
-                "Primary checkout is missing or no longer a directory",
-                at: timestamp
+            // Skip every git probe: the path is gone, so any call would just
+            // produce another "no such directory" failure. The Missing status
+            // is what the dashboard uses to surface Relocate / Remove.
+            return ProjectHealth(
+                status: .missing,
+                currentBranch: nil,
+                workingTree: nil,
+                branchSync: nil,
+                worktreeCount: nil,
+                gitHub: nil,
+                lastRefreshedAt: timestamp
             )
         }
 
