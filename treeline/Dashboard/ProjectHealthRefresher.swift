@@ -36,22 +36,25 @@ struct ProjectHealthRefresher: Sendable {
         }
 
         do {
-            // Run the three cheap probes in parallel. Worktree discovery is
-            // best-effort: older git versions or non-standard repos can fail
-            // `git worktree list --porcelain` without invalidating branch or
-            // status, so we don't let it degrade the whole snapshot.
+            // Run the cheap probes in parallel. Worktree discovery and branch
+            // sync are best-effort: older git versions or non-standard repos
+            // can fail those calls without invalidating branch or status, so
+            // we don't let them degrade the whole snapshot.
             async let branchTask = gitClient.currentBranch(at: primaryURL)
             async let dirtyTask = gitClient.isWorkingTreeDirty(at: primaryURL)
+            async let syncTask = bestEffortBranchSync(at: primaryURL)
             async let worktreeCountTask = bestEffortWorktreeCount(at: primaryURL)
 
             let branch = try await branchTask
             let isDirty = try await dirtyTask
+            let branchSync = await syncTask
             let worktreeCount = await worktreeCountTask
 
             return ProjectHealth(
                 status: .ready,
                 currentBranch: branch,
                 workingTree: isDirty ? .dirty : .clean,
+                branchSync: branchSync,
                 worktreeCount: worktreeCount,
                 lastRefreshedAt: timestamp
             )
@@ -82,11 +85,19 @@ struct ProjectHealthRefresher: Sendable {
         return max(paths.count, 1)
     }
 
+    private func bestEffortBranchSync(at url: URL) async -> BranchSync? {
+        // Returning `nil` here means "unknown" — the row renders that as the
+        // dashboard's understandable fallback rather than degrading the whole
+        // Project just because porcelain v2 wasn't parseable on this repo.
+        try? await gitClient.branchSync(at: url)
+    }
+
     private func degraded(_ reason: String, at timestamp: Date) -> ProjectHealth {
         ProjectHealth(
             status: .degraded(reason: reason),
             currentBranch: nil,
             workingTree: nil,
+            branchSync: nil,
             worktreeCount: nil,
             lastRefreshedAt: timestamp
         )

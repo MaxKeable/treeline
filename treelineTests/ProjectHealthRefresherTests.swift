@@ -198,6 +198,81 @@ struct ProjectHealthRefresherTests {
         #expect(health.workingTree == .clean)
     }
 
+    @Test func includesBranchSyncFromPorcelainV2() async throws {
+        let fm = FileManager.default
+        let checkout = try makeTempCheckout("sync-ahead")
+        defer { try? fm.removeItem(at: checkout) }
+        let project = makeProject(at: checkout)
+
+        let runner = FakeCLIRunner()
+        runner.stub(arguments: ["rev-parse", "--abbrev-ref", "HEAD"], stdout: "main\n")
+        runner.stub(arguments: ["status", "--porcelain"], stdout: "")
+        runner.stub(arguments: ["worktree", "list", "--porcelain"], stdout: "")
+        runner.stub(
+            arguments: ["status", "--porcelain=v2", "--branch", "--untracked-files=no"],
+            stdout: """
+            # branch.oid abc
+            # branch.head main
+            # branch.upstream origin/main
+            # branch.ab +2 -0
+            """
+        )
+
+        let refresher = ProjectHealthRefresher(gitClient: GitClient(runner: runner))
+        let health = await refresher.refresh(project)
+
+        #expect(health.status == .ready)
+        #expect(health.branchSync == .ahead(2))
+    }
+
+    @Test func branchSyncFailureLeavesHealthReadyWithUnknownSync() async throws {
+        // Sync probe failure must be best-effort — the row falls back to
+        // "unknown" rather than degrading the whole snapshot.
+        let fm = FileManager.default
+        let checkout = try makeTempCheckout("sync-fail")
+        defer { try? fm.removeItem(at: checkout) }
+        let project = makeProject(at: checkout)
+
+        let runner = FakeCLIRunner()
+        runner.stub(arguments: ["rev-parse", "--abbrev-ref", "HEAD"], stdout: "main\n")
+        runner.stub(arguments: ["status", "--porcelain"], stdout: "")
+        runner.stub(arguments: ["worktree", "list", "--porcelain"], stdout: "")
+        runner.stubFailure(
+            arguments: ["status", "--porcelain=v2", "--branch", "--untracked-files=no"],
+            error: .nonZeroExit(status: 128, standardError: "boom", standardOutput: "")
+        )
+
+        let refresher = ProjectHealthRefresher(gitClient: GitClient(runner: runner))
+        let health = await refresher.refresh(project)
+
+        #expect(health.status == .ready)
+        #expect(health.branchSync == nil)
+    }
+
+    @Test func branchSyncSurfacesNoUpstreamForLocalOnlyRepo() async throws {
+        let fm = FileManager.default
+        let checkout = try makeTempCheckout("local-only-sync")
+        defer { try? fm.removeItem(at: checkout) }
+        let project = makeProject(at: checkout, displayName: "local-only")
+
+        let runner = FakeCLIRunner()
+        runner.stub(arguments: ["rev-parse", "--abbrev-ref", "HEAD"], stdout: "main\n")
+        runner.stub(arguments: ["status", "--porcelain"], stdout: "")
+        runner.stub(arguments: ["worktree", "list", "--porcelain"], stdout: "")
+        runner.stub(
+            arguments: ["status", "--porcelain=v2", "--branch", "--untracked-files=no"],
+            stdout: """
+            # branch.oid abc
+            # branch.head main
+            """
+        )
+
+        let refresher = ProjectHealthRefresher(gitClient: GitClient(runner: runner))
+        let health = await refresher.refresh(project)
+
+        #expect(health.branchSync == .noUpstream)
+    }
+
     @Test func bestEffortWorktreeCountFallsBackToOneOnFailure() async throws {
         let fm = FileManager.default
         let checkout = try makeTempCheckout("wt-fail")
