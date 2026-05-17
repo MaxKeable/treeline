@@ -5,7 +5,7 @@ import Foundation
 /// directory (see `Project`), not from GitHub. A repository with no GitHub
 /// remote, no `gh` install, or no auth simply has no identity to record and
 /// remains a fully usable local-only Project.
-struct GitHubIdentity: Equatable, Hashable, Codable, Sendable {
+struct GitHubIdentity: Equatable, Hashable, NonSecretPersistable, Sendable {
     let owner: String
     let name: String
 

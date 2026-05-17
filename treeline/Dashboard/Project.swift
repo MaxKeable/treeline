@@ -10,7 +10,7 @@ import Foundation
 /// (`git rev-parse --git-common-dir`), not the selected folder, the checkout
 /// root, or GitHub metadata. Two checkouts that share the same common
 /// directory are the same Project.
-struct Project: Identifiable, Equatable, Hashable, Codable {
+struct Project: Identifiable, Equatable, Hashable, NonSecretPersistable {
     var commonDirectoryPath: String
     var primaryCheckoutPath: String
     var displayName: String
