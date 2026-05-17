@@ -985,6 +985,239 @@ struct ProjectsDashboardStateTests {
         #expect(reloaded.lastActiveProjectID == nil)
     }
 
+    @Test func changePrimaryCheckoutSwitchesPrimaryWithoutChangingIdentity() async throws {
+        let fm = FileManager.default
+        let primary = fm.temporaryDirectory.appendingPathComponent("treeline-cp-primary-\(UUID().uuidString)")
+        let alternate = fm.temporaryDirectory.appendingPathComponent("treeline-cp-alt-\(UUID().uuidString)")
+        try fm.createDirectory(at: primary, withIntermediateDirectories: true)
+        try fm.createDirectory(at: alternate, withIntermediateDirectories: true)
+        let storeURL = fm.temporaryDirectory
+            .appendingPathComponent("treeline-cp-\(UUID().uuidString)")
+            .appendingPathComponent("projects.json")
+        defer {
+            try? fm.removeItem(at: primary)
+            try? fm.removeItem(at: alternate)
+            try? fm.removeItem(at: storeURL.deletingLastPathComponent())
+        }
+
+        let commonDir = "/Users/dev/acme/.git"
+        let project = Project(
+            commonDirectoryPath: commonDir,
+            primaryCheckoutPath: primary.path,
+            displayName: "acme",
+            checkoutPaths: [primary.path, alternate.path]
+        )
+        try ProjectStore(fileURL: storeURL).save(PersistedProjectState(projects: [project]))
+
+        let runner = FakeCLIRunner()
+        // The candidate must verify against git and resolve to the same
+        // common directory the Project already tracks.
+        runner.stub(arguments: ["rev-parse", "--show-toplevel"], stdout: "\(alternate.path)\n")
+        runner.stub(arguments: ["rev-parse", "--git-common-dir"], stdout: "\(commonDir)\n")
+
+        let state = ProjectsDashboardState(
+            store: ProjectStore(fileURL: storeURL),
+            gitClient: GitClient(runner: runner)
+        )
+
+        let updated = try await state.changePrimaryCheckout(project, to: alternate)
+
+        #expect(updated.id == project.id)
+        #expect(updated.commonDirectoryPath == project.commonDirectoryPath)
+        #expect(updated.primaryCheckoutPath == alternate.path)
+        // The candidate set is preserved — switching primary doesn't drop
+        // other known checkouts.
+        #expect(updated.checkoutPaths.contains(primary.path))
+        #expect(updated.checkoutPaths.contains(alternate.path))
+
+        // Persisted for the next launch.
+        let reloaded = ProjectStore(fileURL: storeURL).load()
+        #expect(reloaded.projects.first?.primaryCheckoutPath == alternate.path)
+        #expect(reloaded.projects.first?.id == project.id)
+    }
+
+    @Test func changePrimaryCheckoutDropsCachedHealthSoNextRefreshUsesNewPrimary() async throws {
+        let fm = FileManager.default
+        let primary = fm.temporaryDirectory.appendingPathComponent("treeline-cp-h-primary-\(UUID().uuidString)")
+        let alternate = fm.temporaryDirectory.appendingPathComponent("treeline-cp-h-alt-\(UUID().uuidString)")
+        try fm.createDirectory(at: primary, withIntermediateDirectories: true)
+        try fm.createDirectory(at: alternate, withIntermediateDirectories: true)
+        defer {
+            try? fm.removeItem(at: primary)
+            try? fm.removeItem(at: alternate)
+        }
+
+        let commonDir = "/Users/dev/acme/.git"
+        let project = Project(
+            commonDirectoryPath: commonDir,
+            primaryCheckoutPath: primary.path,
+            displayName: "acme",
+            checkoutPaths: [primary.path, alternate.path]
+        )
+
+        let runner = FakeCLIRunner()
+        runner.stub(arguments: ["rev-parse", "--abbrev-ref", "HEAD"], stdout: "main\n")
+        runner.stub(arguments: ["status", "--porcelain"], stdout: "")
+        runner.stub(arguments: ["worktree", "list", "--porcelain"], stdout: "")
+        runner.stub(arguments: ["rev-parse", "--show-toplevel"], stdout: "\(alternate.path)\n")
+        runner.stub(arguments: ["rev-parse", "--git-common-dir"], stdout: "\(commonDir)\n")
+
+        let state = ProjectsDashboardState(
+            projects: [project],
+            gitClient: GitClient(runner: runner),
+            healthRefresher: ProjectHealthRefresher(gitClient: GitClient(runner: runner))
+        )
+
+        // Seed a snapshot against the original primary.
+        await state.refreshHealth(for: project)
+        #expect(state.health(for: project).status == .ready)
+
+        let updated = try await state.changePrimaryCheckout(project, to: alternate)
+        // The cached snapshot is gone — the dashboard must re-probe rather
+        // than continue showing data from the previous primary.
+        #expect(state.healthByProjectID[updated.id] == nil)
+        #expect(state.health(for: updated) == .loading)
+
+        await state.refreshHealth(for: updated)
+        let refreshed = state.health(for: updated)
+        #expect(refreshed.status == .ready)
+        // The refresh ran git probes against the new primary path. Inspect the
+        // last refresh invocation's working directory to prove it.
+        let lastBranchProbe = runner.invocations.last { $0.arguments == ["rev-parse", "--abbrev-ref", "HEAD"] }
+        #expect(lastBranchProbe?.workingDirectory?.path == alternate.path)
+    }
+
+    @Test func changePrimaryCheckoutRejectsUnknownCandidate() async throws {
+        let fm = FileManager.default
+        let primary = fm.temporaryDirectory.appendingPathComponent("treeline-cp-unknown-\(UUID().uuidString)")
+        let stranger = fm.temporaryDirectory.appendingPathComponent("treeline-cp-stranger-\(UUID().uuidString)")
+        try fm.createDirectory(at: primary, withIntermediateDirectories: true)
+        try fm.createDirectory(at: stranger, withIntermediateDirectories: true)
+        defer {
+            try? fm.removeItem(at: primary)
+            try? fm.removeItem(at: stranger)
+        }
+
+        let project = Project(
+            commonDirectoryPath: "/Users/dev/acme/.git",
+            primaryCheckoutPath: primary.path,
+            displayName: "acme",
+            checkoutPaths: [primary.path]
+        )
+        let state = ProjectsDashboardState(
+            projects: [project],
+            gitClient: GitClient(runner: FakeCLIRunner())
+        )
+
+        do {
+            _ = try await state.changePrimaryCheckout(project, to: stranger)
+            Issue.record("expected unknownCheckout error")
+        } catch ProjectsDashboardState.ChangePrimaryCheckoutError.unknownCheckout {
+            // expected
+        }
+        // The original primary is untouched; the invalid candidate didn't
+        // silently slip in.
+        #expect(state.projects.first?.primaryCheckoutPath == primary.path)
+    }
+
+    @Test func changePrimaryCheckoutRejectsMissingCandidate() async throws {
+        let fm = FileManager.default
+        let primary = fm.temporaryDirectory.appendingPathComponent("treeline-cp-missing-primary-\(UUID().uuidString)")
+        try fm.createDirectory(at: primary, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: primary) }
+
+        // Candidate is tracked but doesn't exist on disk anymore.
+        let ghostPath = fm.temporaryDirectory
+            .appendingPathComponent("treeline-cp-ghost-\(UUID().uuidString)").path
+        let project = Project(
+            commonDirectoryPath: "/Users/dev/acme/.git",
+            primaryCheckoutPath: primary.path,
+            displayName: "acme",
+            checkoutPaths: [primary.path, ghostPath]
+        )
+        let state = ProjectsDashboardState(
+            projects: [project],
+            gitClient: GitClient(runner: FakeCLIRunner())
+        )
+
+        do {
+            _ = try await state.changePrimaryCheckout(
+                project,
+                to: URL(fileURLWithPath: ghostPath)
+            )
+            Issue.record("expected missingFolder error")
+        } catch ProjectsDashboardState.ChangePrimaryCheckoutError.missingFolder(let reported) {
+            #expect(reported == ghostPath)
+        }
+        #expect(state.projects.first?.primaryCheckoutPath == primary.path)
+    }
+
+    @Test func changePrimaryCheckoutRejectsRepositoryMismatch() async throws {
+        let fm = FileManager.default
+        let primary = fm.temporaryDirectory.appendingPathComponent("treeline-cp-mismatch-primary-\(UUID().uuidString)")
+        let stale = fm.temporaryDirectory.appendingPathComponent("treeline-cp-mismatch-stale-\(UUID().uuidString)")
+        try fm.createDirectory(at: primary, withIntermediateDirectories: true)
+        try fm.createDirectory(at: stale, withIntermediateDirectories: true)
+        defer {
+            try? fm.removeItem(at: primary)
+            try? fm.removeItem(at: stale)
+        }
+
+        let project = Project(
+            commonDirectoryPath: "/Users/dev/acme/.git",
+            primaryCheckoutPath: primary.path,
+            displayName: "acme",
+            checkoutPaths: [primary.path, stale.path]
+        )
+
+        let runner = FakeCLIRunner()
+        // The candidate's folder still exists on disk but now resolves to a
+        // different repository — promoting it would silently change Project
+        // identity.
+        runner.stub(arguments: ["rev-parse", "--show-toplevel"], stdout: "\(stale.path)\n")
+        runner.stub(arguments: ["rev-parse", "--git-common-dir"], stdout: "/Users/dev/other/.git\n")
+
+        let state = ProjectsDashboardState(
+            projects: [project],
+            gitClient: GitClient(runner: runner)
+        )
+
+        do {
+            _ = try await state.changePrimaryCheckout(project, to: stale)
+            Issue.record("expected repositoryMismatch error")
+        } catch ProjectsDashboardState.ChangePrimaryCheckoutError.repositoryMismatch {
+            // expected
+        }
+        // No state change.
+        #expect(state.projects.first?.primaryCheckoutPath == primary.path)
+        #expect(state.projects.first?.commonDirectoryPath == "/Users/dev/acme/.git")
+    }
+
+    @Test func changePrimaryCheckoutToCurrentPrimaryIsNoOp() async throws {
+        let fm = FileManager.default
+        let primary = fm.temporaryDirectory.appendingPathComponent("treeline-cp-noop-\(UUID().uuidString)")
+        try fm.createDirectory(at: primary, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: primary) }
+
+        let project = Project(
+            commonDirectoryPath: "/Users/dev/acme/.git",
+            primaryCheckoutPath: primary.path,
+            displayName: "acme",
+            checkoutPaths: [primary.path]
+        )
+        let runner = FakeCLIRunner()
+        let state = ProjectsDashboardState(
+            projects: [project],
+            gitClient: GitClient(runner: runner)
+        )
+
+        let result = try await state.changePrimaryCheckout(project, to: primary)
+        #expect(result.primaryCheckoutPath == primary.path)
+        // Re-selecting the current primary shouldn't shell out to git — the
+        // no-op path returns before any rev-parse.
+        #expect(runner.invocations.isEmpty)
+    }
+
     @Test func addProjectSurfacesGitErrors() async throws {
         let runner = FakeCLIRunner()
         runner.stubFailure(

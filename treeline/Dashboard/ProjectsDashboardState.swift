@@ -267,6 +267,97 @@ final class ProjectsDashboardState {
         case notConfigured
     }
 
+    enum ChangePrimaryCheckoutError: Error, Equatable {
+        case notConfigured
+        case projectNotFound
+        /// The candidate path isn't one of the checkouts or worktrees this
+        /// Project already tracks. Picking arbitrary new paths is what
+        /// `addProject` is for; switching primary is restricted to known
+        /// candidates so the user can't accidentally fold an unrelated repo
+        /// in via this action.
+        case unknownCheckout(path: String)
+        /// The candidate exists in our records but no longer exists on disk.
+        /// Promoting it to primary would put the dashboard straight into
+        /// `.missing`, so we refuse and ask the user to pick a real folder.
+        case missingFolder(path: String)
+        /// Re-resolving the candidate through git produced a different
+        /// `commonDirectoryPath` than the Project's. That means the candidate
+        /// is no longer part of this repository (worktree was pruned, folder
+        /// got replaced with a sibling clone, etc.) — silently switching would
+        /// change Project identity, so we surface it instead.
+        case repositoryMismatch(message: String)
+    }
+
+    /// Promote one of the Project's known checkouts or worktrees to primary.
+    /// Project identity (`commonDirectoryPath`) is preserved — the new primary
+    /// only changes which path future git and GitHub probes target. Persists
+    /// the change so the choice survives relaunch, and drops the cached health
+    /// snapshot so the next refresh runs against the new primary.
+    @discardableResult
+    func changePrimaryCheckout(_ project: Project, to newPrimary: URL) async throws -> Project {
+        guard let gitClient else { throw ChangePrimaryCheckoutError.notConfigured }
+        guard let index = projects.firstIndex(where: { $0.id == project.id }) else {
+            throw ChangePrimaryCheckoutError.projectNotFound
+        }
+
+        let canonical = GitClient.canonicalize(newPrimary).path
+        let current = projects[index]
+
+        // Selecting the current primary is a no-op rather than an error —
+        // tapping the active row in a picker shouldn't punish the user.
+        if canonical == current.primaryCheckoutPath { return current }
+
+        // Restrict primary changes to candidates we already track. Adding a
+        // new path is a different action with different invariants.
+        guard current.checkoutPaths.contains(canonical) else {
+            throw ChangePrimaryCheckoutError.unknownCheckout(path: canonical)
+        }
+
+        var isDirectory: ObjCBool = false
+        let exists = FileManager.default.fileExists(atPath: canonical, isDirectory: &isDirectory)
+        guard exists, isDirectory.boolValue else {
+            throw ChangePrimaryCheckoutError.missingFolder(path: canonical)
+        }
+
+        // Re-verify with git that the candidate still belongs to the same
+        // repository. A stale candidate (worktree pruned out from under us,
+        // folder replaced with an unrelated clone) would otherwise silently
+        // change which repo the dashboard is reporting on.
+        let identity: GitIdentity
+        do {
+            identity = try await gitClient.resolveIdentity(at: URL(fileURLWithPath: canonical))
+        } catch let GitClientError.notInsideRepository(_, underlying) {
+            let trimmed = underlying.trimmingCharacters(in: .whitespacesAndNewlines)
+            throw ChangePrimaryCheckoutError.repositoryMismatch(
+                message: trimmed.isEmpty
+                    ? "The selected checkout no longer resolves to a git repository."
+                    : trimmed
+            )
+        } catch GitClientError.emptyOutput {
+            throw ChangePrimaryCheckoutError.repositoryMismatch(
+                message: "git produced no output for the selected checkout."
+            )
+        }
+
+        guard identity.commonDirectory.path == current.commonDirectoryPath else {
+            throw ChangePrimaryCheckoutError.repositoryMismatch(
+                message: "The selected checkout now belongs to a different repository."
+            )
+        }
+
+        var updated = current
+        updated.primaryCheckoutPath = identity.checkoutRoot.path
+        projects[index] = updated
+
+        // The cached snapshot was probed against the old primary; drop it so
+        // the next refresh reports state from the new primary instead of
+        // briefly showing stale-but-fresh-looking data.
+        healthByProjectID.removeValue(forKey: updated.id)
+
+        try persist()
+        return updated
+    }
+
     enum RelocateProjectError: Error, Equatable {
         case notConfigured
         /// The selected folder isn't inside a git repository at all.

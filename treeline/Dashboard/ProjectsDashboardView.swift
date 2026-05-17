@@ -7,12 +7,16 @@ struct ProjectsDashboardView: View {
     /// Project queued for a destructive Remove confirmation. Bound to the
     /// confirmation dialog so the action only fires after the user agrees.
     @State private var projectPendingRemoval: Project?
+    /// User-facing message for the most recent failed "change primary
+    /// checkout" attempt. Surfaced in its own alert so the wording stays
+    /// specific to this action instead of being lumped in with relocate.
+    @State private var changePrimaryError: String?
 
     var body: some View {
         NavigationStack(path: activeProjectPath) {
             dashboardBody
                 .navigationDestination(for: Project.self) { project in
-                    ProjectDetailView(project: project)
+                    ProjectDetailView(project: project, state: state)
                 }
         }
     }
@@ -74,6 +78,18 @@ struct ProjectsDashboardView: View {
             presenting: state.lastAddError
         ) { _ in
             Button("OK", role: .cancel) { state.lastAddError = nil }
+        } message: { message in
+            Text(message)
+        }
+        .alert(
+            "Couldn't change primary checkout",
+            isPresented: Binding(
+                get: { changePrimaryError != nil },
+                set: { if !$0 { changePrimaryError = nil } }
+            ),
+            presenting: changePrimaryError
+        ) { _ in
+            Button("OK", role: .cancel) { changePrimaryError = nil }
         } message: { message in
             Text(message)
         }
@@ -200,11 +216,72 @@ struct ProjectsDashboardView: View {
                 Button("Refresh Health") {
                     Task { await state.refreshHealth(for: project) }
                 }
+                primaryCheckoutMenu(for: project)
                 Button("Relocate…") { presentRelocatePicker(for: project) }
                 Button("Remove…", role: .destructive) {
                     projectPendingRemoval = project
                 }
             }
+        }
+    }
+
+    /// Submenu of every known checkout/worktree the user can promote to
+    /// primary. The current primary is shown with a checkmark and isn't
+    /// re-selectable. Hidden entirely when there's only one candidate so
+    /// the menu doesn't show an empty / dead submenu.
+    @ViewBuilder
+    private func primaryCheckoutMenu(for project: Project) -> some View {
+        if project.checkoutPaths.count > 1 {
+            Menu("Primary Checkout") {
+                ForEach(project.checkoutPaths, id: \.self) { path in
+                    Button {
+                        Task { await changePrimaryCheckout(project, to: path) }
+                    } label: {
+                        if path == project.primaryCheckoutPath {
+                            Label(path, systemImage: "checkmark")
+                        } else {
+                            Text(path)
+                        }
+                    }
+                    .disabled(path == project.primaryCheckoutPath)
+                }
+            }
+        }
+    }
+
+    private func changePrimaryCheckout(_ project: Project, to path: String) async {
+        do {
+            _ = try await state.changePrimaryCheckout(
+                project,
+                to: URL(fileURLWithPath: path)
+            )
+            // Re-probe immediately so the row reflects the new primary's
+            // branch / sync / GitHub state without waiting for the next
+            // dashboard-wide refresh.
+            if let updated = state.projects.first(where: { $0.id == project.id }) {
+                await state.refreshHealth(for: updated)
+            }
+        } catch let error as ProjectsDashboardState.ChangePrimaryCheckoutError {
+            changePrimaryError = changePrimaryMessage(for: error)
+        } catch {
+            changePrimaryError = String(describing: error)
+        }
+    }
+
+    private func changePrimaryMessage(
+        for error: ProjectsDashboardState.ChangePrimaryCheckoutError
+    ) -> String {
+        switch error {
+        case .notConfigured:
+            return "Treeline isn't configured to access git, so the primary checkout can't be changed."
+        case .projectNotFound:
+            return "That Project is no longer tracked."
+        case .unknownCheckout(let path):
+            return "“\(path)” isn't one of this Project's known checkouts."
+        case .missingFolder(let path):
+            return "“\(path)” no longer exists on disk."
+        case .repositoryMismatch(let message):
+            return message
         }
     }
 
