@@ -226,6 +226,116 @@ struct GitClientTests {
         }
     }
 
+    // MARK: - Branch sync
+
+    @Test func parsesBranchSyncUpToDate() {
+        let porcelain = """
+        # branch.oid abcdef
+        # branch.head main
+        # branch.upstream origin/main
+        # branch.ab +0 -0
+        """
+        #expect(GitClient.parseBranchSync(porcelain) == .upToDate)
+    }
+
+    @Test func parsesBranchSyncAhead() {
+        let porcelain = """
+        # branch.oid abcdef
+        # branch.head main
+        # branch.upstream origin/main
+        # branch.ab +3 -0
+        """
+        #expect(GitClient.parseBranchSync(porcelain) == .ahead(3))
+    }
+
+    @Test func parsesBranchSyncBehind() {
+        let porcelain = """
+        # branch.oid abcdef
+        # branch.head main
+        # branch.upstream origin/main
+        # branch.ab +0 -2
+        """
+        #expect(GitClient.parseBranchSync(porcelain) == .behind(2))
+    }
+
+    @Test func parsesBranchSyncDiverged() {
+        let porcelain = """
+        # branch.oid abcdef
+        # branch.head feature/x
+        # branch.upstream origin/feature/x
+        # branch.ab +4 -7
+        """
+        #expect(GitClient.parseBranchSync(porcelain) == .diverged(ahead: 4, behind: 7))
+    }
+
+    @Test func parsesBranchSyncNoUpstream() {
+        // Branch exists but has no configured upstream — porcelain v2 omits
+        // both `# branch.upstream` and `# branch.ab`.
+        let porcelain = """
+        # branch.oid abcdef
+        # branch.head local-only
+        """
+        #expect(GitClient.parseBranchSync(porcelain) == .noUpstream)
+    }
+
+    @Test func parsesBranchSyncDetachedHead() {
+        let porcelain = """
+        # branch.oid abcdef
+        # branch.head (detached)
+        """
+        #expect(GitClient.parseBranchSync(porcelain) == .detached)
+    }
+
+    @Test func parsesBranchSyncReturnsNilForUnrecognizedOutput() {
+        // Empty output and noise (e.g. a CLI failure that returned text on
+        // stdout) should resolve to .unknown / nil, not crash or fall through.
+        #expect(GitClient.parseBranchSync("") == nil)
+        #expect(GitClient.parseBranchSync("not git output\n") == nil)
+        // Malformed ab line — counts unparseable.
+        let malformed = """
+        # branch.head main
+        # branch.upstream origin/main
+        # branch.ab garbage
+        """
+        #expect(GitClient.parseBranchSync(malformed) == nil)
+    }
+
+    @Test func branchSyncInvokesPorcelainV2Status() async throws {
+        let runner = FakeCLIRunner()
+        runner.stub(
+            arguments: ["status", "--porcelain=v2", "--branch", "--untracked-files=no"],
+            stdout: """
+            # branch.oid abc
+            # branch.head main
+            # branch.upstream origin/main
+            # branch.ab +1 -0
+            """
+        )
+        let client = GitClient(runner: runner)
+        let sync = try await client.branchSync(at: URL(fileURLWithPath: "/Users/dev/acme"))
+        #expect(sync == .ahead(1))
+        #expect(runner.invocations.first?.executableURL.path == "/usr/bin/git")
+    }
+
+    @Test func branchSyncSurfacesCLIErrorsAsNotInsideRepository() async throws {
+        let runner = FakeCLIRunner()
+        runner.stubFailure(
+            arguments: ["status", "--porcelain=v2", "--branch", "--untracked-files=no"],
+            error: .nonZeroExit(
+                status: 128,
+                standardError: "fatal: not a git repository\n",
+                standardOutput: ""
+            )
+        )
+        let client = GitClient(runner: runner)
+        do {
+            _ = try await client.branchSync(at: URL(fileURLWithPath: "/tmp"))
+            Issue.record("expected notInsideRepository error")
+        } catch let GitClientError.notInsideRepository(_, underlying) {
+            #expect(underlying.contains("not a git repository"))
+        }
+    }
+
     @Test func relativeCommonDirIsResolvedAgainstWorkingDirectory() async throws {
         let fm = FileManager.default
         let checkout = fm.temporaryDirectory.appendingPathComponent("treeline-relcommon-\(UUID().uuidString)")

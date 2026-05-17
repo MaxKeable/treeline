@@ -74,6 +74,80 @@ struct GitClient: Sendable {
         }
     }
 
+    /// Run `git status --porcelain=v2 --branch --untracked-files=no` and
+    /// derive how the current branch sits relative to its upstream. Porcelain
+    /// v2 emits stable `# branch.*` headers that already carry the ahead/behind
+    /// counts, so we get sync state in one cheap call instead of a separate
+    /// rev-list walk. Returns `nil` when the headers are unparseable (e.g. an
+    /// empty repository) so the caller can render "unknown" without throwing.
+    func branchSync(at selectedPath: URL) async throws -> BranchSync? {
+        let workingDirectory = try directoryForExecution(at: selectedPath)
+        let invocation = CLIInvocation(
+            executableURL: gitExecutableURL,
+            arguments: ["status", "--porcelain=v2", "--branch", "--untracked-files=no"],
+            workingDirectory: workingDirectory
+        )
+        do {
+            let result = try await runner.run(invocation)
+            return Self.parseBranchSync(result.standardOutput)
+        } catch let CLIError.nonZeroExit(_, stderr, _) {
+            throw GitClientError.notInsideRepository(
+                path: workingDirectory.path,
+                underlying: stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+            )
+        }
+    }
+
+    /// Parse the `# branch.*` headers emitted by `git status --porcelain=v2
+    /// --branch`. Documented in `git-status(1)`:
+    ///
+    ///   # branch.head <name>     — branch name, or `(detached)` for detached HEAD
+    ///   # branch.upstream <name> — present only when an upstream is configured
+    ///   # branch.ab +<a> -<b>    — present only alongside branch.upstream
+    ///
+    /// We ignore file entries and `# branch.oid` because none of them affect
+    /// sync state.
+    static func parseBranchSync(_ porcelain: String) -> BranchSync? {
+        var head: String?
+        var hasUpstream = false
+        var ahead: Int?
+        var behind: Int?
+
+        for rawLine in porcelain.split(separator: "\n", omittingEmptySubsequences: true) {
+            let line = String(rawLine)
+            if line.hasPrefix("# branch.head ") {
+                head = String(line.dropFirst("# branch.head ".count))
+                    .trimmingCharacters(in: .whitespaces)
+            } else if line.hasPrefix("# branch.upstream ") {
+                hasUpstream = true
+            } else if line.hasPrefix("# branch.ab ") {
+                let value = String(line.dropFirst("# branch.ab ".count))
+                let parts = value.split(separator: " ", omittingEmptySubsequences: true)
+                guard parts.count == 2 else { continue }
+                // Format is `+<ahead> -<behind>`; strip the sign before parsing
+                // so a malformed stream falls through to .unknown rather than
+                // pretending a count of zero.
+                let aheadPart = parts[0].hasPrefix("+") ? parts[0].dropFirst() : parts[0]
+                let behindPart = parts[1].hasPrefix("-") ? parts[1].dropFirst() : parts[1]
+                ahead = Int(aheadPart)
+                behind = Int(behindPart)
+            }
+        }
+
+        guard let head else { return nil }
+        if head == "(detached)" { return .detached }
+        if !hasUpstream { return .noUpstream }
+        guard let ahead, let behind else { return nil }
+
+        switch (ahead, behind) {
+        case (0, 0): return .upToDate
+        case (let a, 0) where a > 0: return .ahead(a)
+        case (0, let b) where b > 0: return .behind(b)
+        case (let a, let b) where a > 0 && b > 0: return .diverged(ahead: a, behind: b)
+        default: return nil
+        }
+    }
+
     /// Run `git worktree list --porcelain` from a path inside the repository
     /// and return every checkout/worktree git knows about, canonicalized.
     /// Bare repos (which show up as a `bare` flag with no working tree path)

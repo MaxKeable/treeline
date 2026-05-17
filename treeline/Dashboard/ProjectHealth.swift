@@ -28,6 +28,10 @@ struct ProjectHealth: Equatable, Sendable {
     /// to "(detached)" or hide the row.
     var currentBranch: String?
     var workingTree: WorkingTree?
+    /// Sync state vs. the configured upstream. `nil` means sync state couldn't
+    /// be determined (probe failed, ancient git, etc.); the row should render
+    /// it as "unknown".
+    var branchSync: BranchSync?
     var worktreeCount: Int?
     var lastRefreshedAt: Date?
 
@@ -35,6 +39,7 @@ struct ProjectHealth: Equatable, Sendable {
         status: .loading,
         currentBranch: nil,
         workingTree: nil,
+        branchSync: nil,
         worktreeCount: nil,
         lastRefreshedAt: nil
     )

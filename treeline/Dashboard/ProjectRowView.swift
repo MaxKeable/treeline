@@ -54,11 +54,36 @@ struct ProjectRowView: View {
             HStack(spacing: 12) {
                 branchLabel
                 workingTreeLabel
+                syncLabel
                 worktreeCountLabel
                 refreshedAtLabel
             }
             .font(.caption2)
             .foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder
+    private var syncLabel: some View {
+        // Detached HEAD is already communicated by `branchLabel`, so skip the
+        // duplicate badge when sync state is just confirming that.
+        if case .detached = health.branchSync {
+            EmptyView()
+        } else if let sync = health.branchSync {
+            Label(sync.displayLabel, systemImage: sync.systemImageName)
+                .foregroundStyle(syncTint(sync))
+        } else if health.status == .ready {
+            Label("unknown", systemImage: "questionmark.circle")
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func syncTint(_ sync: BranchSync) -> Color {
+        switch sync {
+        case .upToDate: return .green
+        case .ahead, .behind: return .blue
+        case .diverged: return .orange
+        case .noUpstream, .detached: return .secondary
         }
     }
 
@@ -116,6 +141,7 @@ struct ProjectRowView: View {
             status: .ready,
             currentBranch: "main",
             workingTree: .clean,
+            branchSync: .ahead(2),
             worktreeCount: 2,
             lastRefreshedAt: Date()
         )
@@ -134,6 +160,7 @@ struct ProjectRowView: View {
             status: .degraded(reason: "Primary checkout is missing or no longer a directory"),
             currentBranch: nil,
             workingTree: nil,
+            branchSync: nil,
             worktreeCount: nil,
             lastRefreshedAt: Date()
         )
