@@ -76,7 +76,7 @@ struct ProjectHealthRefresherTests {
         #expect(health.worktreeCount == 1)
     }
 
-    @Test func reportsDegradedWhenPrimaryCheckoutIsMissing() async {
+    @Test func reportsMissingWhenPrimaryCheckoutIsMissing() async {
         let project = Project(
             commonDirectoryPath: "/Users/dev/gone/.git",
             primaryCheckoutPath: "/Users/dev/definitely-not-a-real-path-\(UUID().uuidString)",
@@ -90,12 +90,10 @@ struct ProjectHealthRefresherTests {
         let refresher = ProjectHealthRefresher(gitClient: GitClient(runner: runner))
         let health = await refresher.refresh(project)
 
-        guard case .degraded(let reason) = health.status else {
-            Issue.record("expected degraded status, got \(health.status)")
-            return
-        }
-        #expect(reason.lowercased().contains("missing"))
+        #expect(health.status == .missing)
         #expect(health.lastRefreshedAt != nil)
+        #expect(health.currentBranch == nil)
+        #expect(health.workingTree == nil)
         #expect(runner.invocations.isEmpty)
     }
 
@@ -362,9 +360,10 @@ struct ProjectHealthRefresherTests {
         }
     }
 
-    @Test func githubCapabilityNotProbedWhenDegraded() async throws {
-        // If the path is missing the refresher returns degraded immediately;
-        // there's nothing to point `gh` at, so the probe shouldn't run.
+    @Test func githubCapabilityNotProbedWhenMissing() async throws {
+        // If the path is missing the refresher returns the Missing sentinel
+        // immediately; there's nothing to point `gh` at, so the probe
+        // shouldn't run.
         let project = Project(
             commonDirectoryPath: "/Users/dev/gone/.git",
             primaryCheckoutPath: "/Users/dev/definitely-not-a-real-path-\(UUID().uuidString)",
@@ -380,10 +379,7 @@ struct ProjectHealthRefresherTests {
         )
 
         let health = await refresher.refresh(project)
-        guard case .degraded = health.status else {
-            Issue.record("expected degraded status, got \(health.status)")
-            return
-        }
+        #expect(health.status == .missing)
         #expect(health.gitHub == nil)
         #expect(probe.probeCount == 0)
     }

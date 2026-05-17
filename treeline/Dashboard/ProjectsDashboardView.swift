@@ -4,6 +4,9 @@ import AppKit
 struct ProjectsDashboardView: View {
     @Bindable var state: ProjectsDashboardState
     var onAddProject: (() -> Void)?
+    /// Project queued for a destructive Remove confirmation. Bound to the
+    /// confirmation dialog so the action only fires after the user agrees.
+    @State private var projectPendingRemoval: Project?
 
     var body: some View {
         NavigationStack(path: activeProjectPath) {
@@ -74,10 +77,40 @@ struct ProjectsDashboardView: View {
         } message: { message in
             Text(message)
         }
+        .alert(
+            "Couldn't relocate Project",
+            isPresented: Binding(
+                get: { state.lastRelocateError != nil },
+                set: { if !$0 { state.lastRelocateError = nil } }
+            ),
+            presenting: state.lastRelocateError
+        ) { _ in
+            Button("OK", role: .cancel) { state.lastRelocateError = nil }
+        } message: { message in
+            Text(message)
+        }
         .overlay(alignment: .top) {
             attachedNoticeBanner
         }
         .animation(.easeInOut(duration: 0.2), value: state.attachedNotice)
+        .confirmationDialog(
+            "Remove Project?",
+            isPresented: Binding(
+                get: { projectPendingRemoval != nil },
+                set: { if !$0 { projectPendingRemoval = nil } }
+            ),
+            presenting: projectPendingRemoval
+        ) { project in
+            Button("Remove “\(project.displayName)”", role: .destructive) {
+                state.removeProject(project)
+                projectPendingRemoval = nil
+            }
+            Button("Cancel", role: .cancel) {
+                projectPendingRemoval = nil
+            }
+        } message: { project in
+            Text("This only removes the Project from Treeline. Files at \(project.primaryCheckoutPath) are not touched.")
+        }
     }
 
     /// Transient banner shown when `addProject` attached the selected path to
@@ -129,17 +162,47 @@ struct ProjectsDashboardView: View {
 
     private var projectList: some View {
         List(state.projects) { project in
-            NavigationLink(value: project) {
-                ProjectRowView(
-                    project: project,
-                    health: state.health(for: project),
-                    isRefreshing: state.isRefreshing(project),
-                    isStale: state.isStale(for: project)
-                )
+            let health = state.health(for: project)
+            let isMissing = health.status == .missing
+            Group {
+                if isMissing {
+                    // Missing rows don't navigate — there's no detail to show
+                    // until the user repairs or removes the Project. Surface
+                    // Relocate / Remove inline so the fix path is one click.
+                    HStack(alignment: .top, spacing: 12) {
+                        ProjectRowView(
+                            project: project,
+                            health: health,
+                            isRefreshing: state.isRefreshing(project),
+                            isStale: state.isStale(for: project)
+                        )
+                        Spacer(minLength: 0)
+                        VStack(alignment: .trailing, spacing: 6) {
+                            Button("Relocate…") { presentRelocatePicker(for: project) }
+                            Button("Remove…", role: .destructive) {
+                                projectPendingRemoval = project
+                            }
+                        }
+                        .controlSize(.small)
+                    }
+                } else {
+                    NavigationLink(value: project) {
+                        ProjectRowView(
+                            project: project,
+                            health: health,
+                            isRefreshing: state.isRefreshing(project),
+                            isStale: state.isStale(for: project)
+                        )
+                    }
+                }
             }
             .contextMenu {
                 Button("Refresh Health") {
                     Task { await state.refreshHealth(for: project) }
+                }
+                Button("Relocate…") { presentRelocatePicker(for: project) }
+                Button("Remove…", role: .destructive) {
+                    projectPendingRemoval = project
                 }
             }
         }
@@ -151,6 +214,38 @@ struct ProjectsDashboardView: View {
             return
         }
         presentFolderPicker()
+    }
+
+    private func presentRelocatePicker(for project: Project) {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.title = "Choose the new folder for “\(project.displayName)”"
+        panel.prompt = "Relocate"
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            Task { @MainActor in
+                do {
+                    _ = try await state.relocateProject(project, to: url)
+                } catch let error as ProjectsDashboardState.RelocateProjectError {
+                    state.lastRelocateError = relocateMessage(for: error)
+                } catch {
+                    state.lastRelocateError = String(describing: error)
+                }
+            }
+        }
+    }
+
+    private func relocateMessage(for error: ProjectsDashboardState.RelocateProjectError) -> String {
+        switch error {
+        case .notConfigured:
+            return "Treeline isn't configured to access git, so the Project can't be relocated."
+        case .invalidPath(let reason):
+            return "That folder isn't inside a git repository.\n\n\(reason)"
+        case .repositoryMismatch(let message):
+            return message
+        }
     }
 
     private func presentFolderPicker() {
