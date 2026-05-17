@@ -53,6 +53,34 @@ struct ProjectsDashboardView: View {
         } message: { message in
             Text(message)
         }
+        .overlay(alignment: .top) {
+            attachedNoticeBanner
+        }
+        .animation(.easeInOut(duration: 0.2), value: state.attachedNotice)
+    }
+
+    /// Transient banner shown when `addProject` attached the selected path to
+    /// an existing Project. Auto-dismisses so the user can keep working
+    /// without clicking anything.
+    @ViewBuilder
+    private var attachedNoticeBanner: some View {
+        if let notice = state.attachedNotice {
+            Text(notice)
+                .font(.callout)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .background(.regularMaterial, in: Capsule())
+                .overlay(Capsule().strokeBorder(.quaternary))
+                .padding(.top, 12)
+                .transition(.move(edge: .top).combined(with: .opacity))
+                .task(id: notice) {
+                    try? await Task.sleep(nanoseconds: 3_000_000_000)
+                    if state.attachedNotice == notice {
+                        state.attachedNotice = nil
+                    }
+                }
+                .accessibilityLabel(Text(notice))
+        }
     }
 
     private var emptyState: some View {

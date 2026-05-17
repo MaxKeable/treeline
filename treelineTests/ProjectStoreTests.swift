@@ -153,6 +153,53 @@ struct ProjectStoreTests {
         #expect(loaded.lastActiveProjectID == nil)
     }
 
+    @Test func legacyPayloadBackfillsCheckoutPathsFromPrimary() throws {
+        let url = makeTempFileURL()
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+
+        // v1 payload predates the `checkoutPaths` field. Decoding must
+        // backfill it from `primaryCheckoutPath` so the invariant "primary
+        // is always in the list" survives a load before the user attaches
+        // anything new.
+        let payload = """
+        {
+          "schemaVersion": 1,
+          "projects": [
+            {
+              "commonDirectoryPath": "/x/.git",
+              "primaryCheckoutPath": "/x",
+              "displayName": "x"
+            }
+          ]
+        }
+        """
+        try Data(payload.utf8).write(to: url)
+
+        let loaded = ProjectStore(fileURL: url).load()
+        #expect(loaded.projects.first?.checkoutPaths == ["/x"])
+    }
+
+    @Test func roundTripsCheckoutPaths() throws {
+        let url = makeTempFileURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+
+        let store = ProjectStore(fileURL: url)
+        let project = Project(
+            commonDirectoryPath: "/Users/dev/acme/.git",
+            primaryCheckoutPath: "/Users/dev/acme",
+            displayName: "acme",
+            checkoutPaths: ["/Users/dev/acme-wt", "/Users/dev/acme"]
+        )
+        try store.save(PersistedProjectState(projects: [project]))
+
+        let loaded = store.load()
+        #expect(loaded.projects.first?.checkoutPaths == ["/Users/dev/acme", "/Users/dev/acme-wt"])
+    }
+
     @Test func currentSchemaVersionLoadsCleanly() throws {
         let url = makeTempFileURL()
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }

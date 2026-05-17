@@ -5,7 +5,7 @@ import Foundation
 /// metadata, etc.). `lastActiveProjectID` is optional so older payloads
 /// decode cleanly and so downgrades that drop the field still round-trip.
 struct PersistedProjectState: Codable, Equatable {
-    static let currentSchemaVersion = 1
+    static let currentSchemaVersion = 2
 
     var schemaVersion: Int
     var projects: [Project]

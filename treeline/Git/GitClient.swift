@@ -42,6 +42,46 @@ struct GitClient: Sendable {
         )
     }
 
+    /// Run `git worktree list --porcelain` from a path inside the repository
+    /// and return every checkout/worktree git knows about, canonicalized.
+    /// Bare repos (which show up as a `bare` flag with no working tree path)
+    /// are skipped — Treeline only tracks paths the user can open.
+    func listWorktreePaths(at selectedPath: URL) async throws -> [URL] {
+        let workingDirectory = try directoryForExecution(at: selectedPath)
+        let invocation = CLIInvocation(
+            executableURL: gitExecutableURL,
+            arguments: ["worktree", "list", "--porcelain"],
+            workingDirectory: workingDirectory
+        )
+        do {
+            let result = try await runner.run(invocation)
+            return Self.parseWorktreePaths(result.standardOutput).map { Self.canonicalize($0) }
+        } catch let CLIError.nonZeroExit(_, stderr, _) {
+            throw GitClientError.notInsideRepository(
+                path: workingDirectory.path,
+                underlying: stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+            )
+        }
+    }
+
+    /// Parse the porcelain v1 format documented in `git-worktree(1)`. Records
+    /// are blank-line separated; each starts with `worktree <path>`. We ignore
+    /// every other attribute (HEAD, branch, locked, prunable) because at this
+    /// slice we only need the working tree paths.
+    static func parseWorktreePaths(_ porcelain: String) -> [URL] {
+        var paths: [URL] = []
+        for rawLine in porcelain.split(separator: "\n", omittingEmptySubsequences: false) {
+            let line = String(rawLine)
+            guard line.hasPrefix("worktree ") else { continue }
+            let value = String(line.dropFirst("worktree ".count))
+                .trimmingCharacters(in: .whitespaces)
+            if !value.isEmpty {
+                paths.append(URL(fileURLWithPath: value))
+            }
+        }
+        return paths
+    }
+
     private func revParse(_ args: [String], workingDirectory: URL) async throws -> String {
         let invocation = CLIInvocation(
             executableURL: gitExecutableURL,
