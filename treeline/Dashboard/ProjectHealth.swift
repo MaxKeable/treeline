@@ -33,6 +33,12 @@ struct ProjectHealth: Equatable, Sendable {
     /// it as "unknown".
     var branchSync: BranchSync?
     var worktreeCount: Int?
+    /// Optional GitHub capability for the primary checkout. `nil` means the
+    /// capability hasn't been probed yet (e.g. the loading sentinel); a
+    /// concrete `.unavailable(reason:)` means we asked and the answer is no.
+    /// Defaulted so older call sites (tests and the loading sentinel) keep
+    /// compiling without naming a GitHub field they don't care about.
+    var gitHub: GitHubCapability? = nil
     var lastRefreshedAt: Date?
 
     static let loading = ProjectHealth(
@@ -41,6 +47,7 @@ struct ProjectHealth: Equatable, Sendable {
         workingTree: nil,
         branchSync: nil,
         worktreeCount: nil,
+        gitHub: nil,
         lastRefreshedAt: nil
     )
 }

@@ -273,6 +273,121 @@ struct ProjectHealthRefresherTests {
         #expect(health.branchSync == .noUpstream)
     }
 
+    /// Drop-in fake for `GitHubCapabilityProbing` so dashboard tests can pin
+    /// the capability state without stubbing every gh argument list.
+    private final class StubGitHubProbe: GitHubCapabilityProbing, @unchecked Sendable {
+        let result: GitHubCapability
+        private(set) var probeCount = 0
+        init(_ result: GitHubCapability) { self.result = result }
+        func probe(at checkout: URL) async -> GitHubCapability {
+            probeCount += 1
+            return result
+        }
+    }
+
+    @Test func includesGitHubCapabilityWhenProbeReturnsCapable() async throws {
+        let fm = FileManager.default
+        let checkout = try makeTempCheckout("gh-capable")
+        defer { try? fm.removeItem(at: checkout) }
+        let project = makeProject(at: checkout)
+
+        let runner = FakeCLIRunner()
+        runner.stub(arguments: ["rev-parse", "--abbrev-ref", "HEAD"], stdout: "main\n")
+        runner.stub(arguments: ["status", "--porcelain"], stdout: "")
+        runner.stub(arguments: ["worktree", "list", "--porcelain"], stdout: "")
+
+        let identity = GitHubIdentity(owner: "MaxKeable", name: "treeline")
+        let probe = StubGitHubProbe(.capable(identity: identity, openPullRequestCount: 5))
+        let refresher = ProjectHealthRefresher(
+            gitClient: GitClient(runner: runner),
+            gitHubProbe: probe
+        )
+
+        let health = await refresher.refresh(project)
+
+        #expect(health.status == .ready)
+        guard case .capable(let returnedIdentity, let count) = health.gitHub else {
+            Issue.record("expected capable, got \(String(describing: health.gitHub))")
+            return
+        }
+        #expect(returnedIdentity == identity)
+        #expect(count == 5)
+        #expect(probe.probeCount == 1)
+    }
+
+    @Test func localOnlyProjectKeepsReadyStateWhenGitHubProbeUnavailable() async throws {
+        let fm = FileManager.default
+        let checkout = try makeTempCheckout("gh-local-only")
+        defer { try? fm.removeItem(at: checkout) }
+        let project = makeProject(at: checkout, displayName: "local-only")
+
+        let runner = FakeCLIRunner()
+        runner.stub(arguments: ["rev-parse", "--abbrev-ref", "HEAD"], stdout: "main\n")
+        runner.stub(arguments: ["status", "--porcelain"], stdout: "")
+        runner.stub(arguments: ["worktree", "list", "--porcelain"], stdout: "")
+
+        let probe = StubGitHubProbe(.unavailable(reason: "No GitHub remote"))
+        let refresher = ProjectHealthRefresher(
+            gitClient: GitClient(runner: runner),
+            gitHubProbe: probe
+        )
+
+        let health = await refresher.refresh(project)
+
+        // Acceptance: local-only repos remain valid Projects — the snapshot
+        // must stay ready, and the capability surfaces as a warning rather
+        // than degrading the row.
+        #expect(health.status == .ready)
+        #expect(health.gitHub == .unavailable(reason: "No GitHub remote"))
+    }
+
+    @Test func githubCapabilityIsNilWhenNoProbeConfigured() async throws {
+        let fm = FileManager.default
+        let checkout = try makeTempCheckout("gh-nil")
+        defer { try? fm.removeItem(at: checkout) }
+        let project = makeProject(at: checkout)
+
+        let runner = FakeCLIRunner()
+        runner.stub(arguments: ["rev-parse", "--abbrev-ref", "HEAD"], stdout: "main\n")
+        runner.stub(arguments: ["status", "--porcelain"], stdout: "")
+        runner.stub(arguments: ["worktree", "list", "--porcelain"], stdout: "")
+
+        let refresher = ProjectHealthRefresher(gitClient: GitClient(runner: runner))
+        let health = await refresher.refresh(project)
+
+        #expect(health.status == .ready)
+        #expect(health.gitHub == nil)
+        for invocation in runner.invocations {
+            #expect(invocation.executableURL.lastPathComponent != "gh")
+        }
+    }
+
+    @Test func githubCapabilityNotProbedWhenDegraded() async throws {
+        // If the path is missing the refresher returns degraded immediately;
+        // there's nothing to point `gh` at, so the probe shouldn't run.
+        let project = Project(
+            commonDirectoryPath: "/Users/dev/gone/.git",
+            primaryCheckoutPath: "/Users/dev/definitely-not-a-real-path-\(UUID().uuidString)",
+            displayName: "gone"
+        )
+        let probe = StubGitHubProbe(.capable(
+            identity: GitHubIdentity(owner: "x", name: "y"),
+            openPullRequestCount: 0
+        ))
+        let refresher = ProjectHealthRefresher(
+            gitClient: GitClient(runner: FakeCLIRunner()),
+            gitHubProbe: probe
+        )
+
+        let health = await refresher.refresh(project)
+        guard case .degraded = health.status else {
+            Issue.record("expected degraded status, got \(health.status)")
+            return
+        }
+        #expect(health.gitHub == nil)
+        #expect(probe.probeCount == 0)
+    }
+
     @Test func bestEffortWorktreeCountFallsBackToOneOnFailure() async throws {
         let fm = FileManager.default
         let checkout = try makeTempCheckout("wt-fail")

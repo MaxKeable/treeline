@@ -84,14 +84,21 @@ final class ProjectsDashboardState {
 
     /// Convenience initializer that loads any persisted Projects and the last
     /// active Project from the given store at construction.
-    convenience init(store: ProjectStore, gitClient: GitClient) {
+    convenience init(
+        store: ProjectStore,
+        gitClient: GitClient,
+        gitHubProbe: (any GitHubCapabilityProbing)? = nil
+    ) {
         let persisted = store.load()
         self.init(
             projects: persisted.projects,
             activeProjectID: persisted.lastActiveProjectID,
             store: store,
             gitClient: gitClient,
-            healthRefresher: ProjectHealthRefresher(gitClient: gitClient)
+            healthRefresher: ProjectHealthRefresher(
+                gitClient: gitClient,
+                gitHubProbe: gitHubProbe
+            )
         )
     }
 

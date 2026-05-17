@@ -38,6 +38,7 @@ struct ProjectRowView: View {
                             .help(reason)
                             .accessibilityLabel(Text("Degraded: \(reason)"))
                     }
+                    gitHubBadge
                 }
                 Text(project.primaryCheckoutPath)
                     .font(.caption)
@@ -74,6 +75,7 @@ struct ProjectRowView: View {
                 workingTreeLabel
                 syncLabel
                 worktreeCountLabel
+                openPRCountLabel
                 refreshedAtLabel
             }
             .font(.caption2)
@@ -136,6 +138,34 @@ struct ProjectRowView: View {
         if let count = health.worktreeCount {
             Label("\(count)", systemImage: "rectangle.stack")
                 .accessibilityLabel(Text("\(count) worktrees"))
+        }
+    }
+
+    @ViewBuilder
+    private var gitHubBadge: some View {
+        switch health.gitHub {
+        case .capable(let identity, _):
+            Label("GitHub", systemImage: "checkmark.shield")
+                .labelStyle(.iconOnly)
+                .foregroundStyle(.secondary)
+                .help("GitHub: \(identity.nameWithOwner)")
+                .accessibilityLabel(Text("GitHub: \(identity.nameWithOwner)"))
+        case .unavailable(let reason):
+            Label("GitHub unavailable", systemImage: "shield.slash")
+                .labelStyle(.iconOnly)
+                .foregroundStyle(.secondary)
+                .help("GitHub unavailable: \(reason)")
+                .accessibilityLabel(Text("GitHub unavailable: \(reason)"))
+        case .none:
+            EmptyView()
+        }
+    }
+
+    @ViewBuilder
+    private var openPRCountLabel: some View {
+        if case .capable(_, let count?) = health.gitHub {
+            Label("\(count) PR\(count == 1 ? "" : "s")", systemImage: "arrow.triangle.pull")
+                .accessibilityLabel(Text("\(count) open pull requests"))
         }
     }
 

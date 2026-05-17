@@ -7,15 +7,22 @@ import Foundation
 /// of the dashboard.
 struct ProjectHealthRefresher: HealthProbing, Sendable {
     let gitClient: GitClient
+    /// Optional probe for GitHub capability. `nil` skips the probe entirely
+    /// so unit tests focused on the git side don't need to stub `gh` and so
+    /// the dashboard can decide whether to enable the capability check at
+    /// startup.
+    let gitHubProbe: (any GitHubCapabilityProbing)?
     let fileManager: FileManager
     let now: @Sendable () -> Date
 
     init(
         gitClient: GitClient,
+        gitHubProbe: (any GitHubCapabilityProbing)? = nil,
         fileManager: FileManager = .default,
         now: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.gitClient = gitClient
+        self.gitHubProbe = gitHubProbe
         self.fileManager = fileManager
         self.now = now
     }
@@ -44,11 +51,13 @@ struct ProjectHealthRefresher: HealthProbing, Sendable {
             async let dirtyTask = gitClient.isWorkingTreeDirty(at: primaryURL)
             async let syncTask = bestEffortBranchSync(at: primaryURL)
             async let worktreeCountTask = bestEffortWorktreeCount(at: primaryURL)
+            async let gitHubTask = bestEffortGitHubCapability(at: primaryURL)
 
             let branch = try await branchTask
             let isDirty = try await dirtyTask
             let branchSync = await syncTask
             let worktreeCount = await worktreeCountTask
+            let gitHub = await gitHubTask
 
             return ProjectHealth(
                 status: .ready,
@@ -56,6 +65,7 @@ struct ProjectHealthRefresher: HealthProbing, Sendable {
                 workingTree: isDirty ? .dirty : .clean,
                 branchSync: branchSync,
                 worktreeCount: worktreeCount,
+                gitHub: gitHub,
                 lastRefreshedAt: timestamp
             )
         } catch let CLIError.launchFailed(reason) {
@@ -85,6 +95,14 @@ struct ProjectHealthRefresher: HealthProbing, Sendable {
         return max(paths.count, 1)
     }
 
+    private func bestEffortGitHubCapability(at url: URL) async -> GitHubCapability? {
+        // No probe configured → leave capability nil so the row hides the
+        // GitHub badge instead of asserting "unavailable". This keeps tests
+        // that focus on git behaviour free of `gh` stubs.
+        guard let gitHubProbe else { return nil }
+        return await gitHubProbe.probe(at: url)
+    }
+
     private func bestEffortBranchSync(at url: URL) async -> BranchSync? {
         // Returning `nil` here means "unknown" — the row renders that as the
         // dashboard's understandable fallback rather than degrading the whole
@@ -99,6 +117,7 @@ struct ProjectHealthRefresher: HealthProbing, Sendable {
             workingTree: nil,
             branchSync: nil,
             worktreeCount: nil,
+            gitHub: nil,
             lastRefreshedAt: timestamp
         )
     }
