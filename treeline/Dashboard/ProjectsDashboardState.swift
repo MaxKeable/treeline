@@ -3,13 +3,15 @@ import Foundation
 /// Observable state for the Projects dashboard.
 ///
 /// Holds the loaded Projects, resolves newly added paths through `GitClient`,
-/// de-duplicates by canonical git common directory, and persists changes
-/// through `ProjectStore`. Branch state, sync state, capability flags, and
+/// de-duplicates by canonical git common directory, persists changes through
+/// `ProjectStore`, and tracks which Project is currently active so the next
+/// launch can reopen it. Branch state, sync state, capability flags, and
 /// refresh orchestration belong in later slices.
 @MainActor
 @Observable
 final class ProjectsDashboardState {
     private(set) var projects: [Project]
+    private(set) var activeProjectID: String?
     var lastAddError: String?
 
     private let store: ProjectStore?
@@ -17,21 +19,51 @@ final class ProjectsDashboardState {
 
     init(
         projects: [Project] = [],
+        activeProjectID: String? = nil,
         store: ProjectStore? = nil,
         gitClient: GitClient? = nil
     ) {
         self.projects = projects
         self.store = store
         self.gitClient = gitClient
+        // Drop a dangling reference so callers never see an "active" project
+        // that isn't in the projects list (e.g. the repo was removed between
+        // launches).
+        if let activeProjectID, projects.contains(where: { $0.id == activeProjectID }) {
+            self.activeProjectID = activeProjectID
+        } else {
+            self.activeProjectID = nil
+        }
     }
 
-    /// Convenience initializer that loads any persisted Projects from the
-    /// given store at construction.
+    /// Convenience initializer that loads any persisted Projects and the last
+    /// active Project from the given store at construction.
     convenience init(store: ProjectStore, gitClient: GitClient) {
-        self.init(projects: store.load(), store: store, gitClient: gitClient)
+        let persisted = store.load()
+        self.init(
+            projects: persisted.projects,
+            activeProjectID: persisted.lastActiveProjectID,
+            store: store,
+            gitClient: gitClient
+        )
     }
 
     var isEmpty: Bool { projects.isEmpty }
+
+    var activeProject: Project? {
+        guard let activeProjectID else { return nil }
+        return projects.first(where: { $0.id == activeProjectID })
+    }
+
+    /// Set or clear the currently active Project and persist the change so
+    /// the next launch can restore it. Unknown Projects are ignored.
+    func setActiveProject(_ project: Project?) {
+        let newID = project?.id
+        if let newID, !projects.contains(where: { $0.id == newID }) { return }
+        if newID == activeProjectID { return }
+        activeProjectID = newID
+        try? persist()
+    }
 
     enum AddOutcome: Equatable {
         case added(Project)
@@ -52,11 +84,20 @@ final class ProjectsDashboardState {
         }
         let project = Project(identity: identity)
         projects.append(project)
-        try store?.save(projects)
+        try persist()
         return .added(project)
     }
 
     enum AddProjectError: Error, Equatable {
         case notConfigured
+    }
+
+    private func persist() throws {
+        try store?.save(
+            PersistedProjectState(
+                projects: projects,
+                lastActiveProjectID: activeProjectID
+            )
+        )
     }
 }

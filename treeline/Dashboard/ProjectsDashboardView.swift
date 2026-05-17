@@ -6,6 +6,25 @@ struct ProjectsDashboardView: View {
     var onAddProject: (() -> Void)?
 
     var body: some View {
+        NavigationStack(path: activeProjectPath) {
+            dashboardBody
+                .navigationDestination(for: Project.self) { project in
+                    ProjectDetailView(project: project)
+                }
+        }
+    }
+
+    /// Drives navigation from the persisted active-project state. The stack
+    /// has at most one entry (the active Project); popping back to the root
+    /// clears the active Project so the next launch shows the dashboard.
+    private var activeProjectPath: Binding<[Project]> {
+        Binding(
+            get: { state.activeProject.map { [$0] } ?? [] },
+            set: { newPath in state.setActiveProject(newPath.last) }
+        )
+    }
+
+    private var dashboardBody: some View {
         Group {
             if state.isEmpty {
                 emptyState
@@ -61,7 +80,9 @@ struct ProjectsDashboardView: View {
 
     private var projectList: some View {
         List(state.projects) { project in
-            ProjectRowView(project: project)
+            NavigationLink(value: project) {
+                ProjectRowView(project: project)
+            }
         }
     }
 

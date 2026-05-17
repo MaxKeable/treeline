@@ -66,7 +66,131 @@ struct ProjectsDashboardStateTests {
 
         // Persisted to JSON for the next launch.
         let reloaded = ProjectStore(fileURL: storeURL).load()
-        #expect(reloaded == [added])
+        #expect(reloaded.projects == [added])
+        // Adding alone does not change the active Project — that happens
+        // through navigation.
+        #expect(reloaded.lastActiveProjectID == nil)
+    }
+
+    @Test func coldStartWithNoProjectsHasNoActiveProject() {
+        let fm = FileManager.default
+        let storeURL = fm.temporaryDirectory
+            .appendingPathComponent("treeline-cold-\(UUID().uuidString)")
+            .appendingPathComponent("projects.json")
+        defer { try? fm.removeItem(at: storeURL.deletingLastPathComponent()) }
+
+        let state = ProjectsDashboardState(
+            store: ProjectStore(fileURL: storeURL),
+            gitClient: GitClient(runner: FakeCLIRunner())
+        )
+
+        #expect(state.isEmpty)
+        #expect(state.activeProject == nil)
+    }
+
+    @Test func launchRestoresLastActiveProjectWhenItStillExists() throws {
+        let fm = FileManager.default
+        let storeURL = fm.temporaryDirectory
+            .appendingPathComponent("treeline-restore-\(UUID().uuidString)")
+            .appendingPathComponent("projects.json")
+        defer { try? fm.removeItem(at: storeURL.deletingLastPathComponent()) }
+
+        let project = Project(
+            commonDirectoryPath: "/Users/dev/acme/.git",
+            primaryCheckoutPath: "/Users/dev/acme",
+            displayName: "acme"
+        )
+        try ProjectStore(fileURL: storeURL).save(
+            PersistedProjectState(projects: [project], lastActiveProjectID: project.id)
+        )
+
+        let state = ProjectsDashboardState(
+            store: ProjectStore(fileURL: storeURL),
+            gitClient: GitClient(runner: FakeCLIRunner())
+        )
+
+        #expect(state.activeProject == project)
+        #expect(state.activeProjectID == project.id)
+    }
+
+    @Test func launchFallsBackToDashboardWhenLastActiveProjectIsMissing() throws {
+        let fm = FileManager.default
+        let storeURL = fm.temporaryDirectory
+            .appendingPathComponent("treeline-missing-\(UUID().uuidString)")
+            .appendingPathComponent("projects.json")
+        defer { try? fm.removeItem(at: storeURL.deletingLastPathComponent()) }
+
+        let surviving = Project(
+            commonDirectoryPath: "/Users/dev/widgets/.git",
+            primaryCheckoutPath: "/Users/dev/widgets",
+            displayName: "widgets"
+        )
+        try ProjectStore(fileURL: storeURL).save(
+            PersistedProjectState(
+                projects: [surviving],
+                lastActiveProjectID: "/Users/dev/gone/.git"
+            )
+        )
+
+        let state = ProjectsDashboardState(
+            store: ProjectStore(fileURL: storeURL),
+            gitClient: GitClient(runner: FakeCLIRunner())
+        )
+
+        #expect(state.projects == [surviving])
+        #expect(state.activeProject == nil)
+        #expect(state.activeProjectID == nil)
+    }
+
+    @Test func setActiveProjectPersistsAcrossLaunches() throws {
+        let fm = FileManager.default
+        let storeURL = fm.temporaryDirectory
+            .appendingPathComponent("treeline-set-active-\(UUID().uuidString)")
+            .appendingPathComponent("projects.json")
+        defer { try? fm.removeItem(at: storeURL.deletingLastPathComponent()) }
+
+        let project = Project(
+            commonDirectoryPath: "/Users/dev/acme/.git",
+            primaryCheckoutPath: "/Users/dev/acme",
+            displayName: "acme"
+        )
+        try ProjectStore(fileURL: storeURL).save(
+            PersistedProjectState(projects: [project])
+        )
+
+        let state = ProjectsDashboardState(
+            store: ProjectStore(fileURL: storeURL),
+            gitClient: GitClient(runner: FakeCLIRunner())
+        )
+        #expect(state.activeProject == nil)
+
+        state.setActiveProject(project)
+        #expect(state.activeProject == project)
+
+        let reloaded = ProjectStore(fileURL: storeURL).load()
+        #expect(reloaded.lastActiveProjectID == project.id)
+
+        // Clearing the active Project also persists.
+        state.setActiveProject(nil)
+        let reloadedAfterClear = ProjectStore(fileURL: storeURL).load()
+        #expect(reloadedAfterClear.lastActiveProjectID == nil)
+    }
+
+    @Test func setActiveProjectIgnoresUnknownProject() {
+        let known = Project(
+            commonDirectoryPath: "/Users/dev/acme/.git",
+            primaryCheckoutPath: "/Users/dev/acme",
+            displayName: "acme"
+        )
+        let stranger = Project(
+            commonDirectoryPath: "/Users/dev/other/.git",
+            primaryCheckoutPath: "/Users/dev/other",
+            displayName: "other"
+        )
+        let state = ProjectsDashboardState(projects: [known])
+        state.setActiveProject(stranger)
+        #expect(state.activeProject == nil)
+        #expect(state.activeProjectID == nil)
     }
 
     @Test func addProjectAttachesWhenCommonDirectoryAlreadyKnown() async throws {
