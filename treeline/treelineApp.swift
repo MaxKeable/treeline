@@ -3,11 +3,20 @@ import SwiftUI
 @main
 struct treelineApp: App {
     @State private var dashboardState: ProjectsDashboardState = {
-        let gitClient = GitClient(runner: CLIRunner())
+        let runner = CLIRunner()
+        let gitClient = GitClient(runner: runner)
+        let ghClient = GHClient(runner: runner)
         if let url = try? ProjectStore.defaultURL() {
-            return ProjectsDashboardState(store: ProjectStore(fileURL: url), gitClient: gitClient)
+            return ProjectsDashboardState(
+                store: ProjectStore(fileURL: url),
+                gitClient: gitClient,
+                gitHubProbe: ghClient
+            )
         }
-        return ProjectsDashboardState(gitClient: gitClient)
+        return ProjectsDashboardState(
+            gitClient: gitClient,
+            healthRefresher: ProjectHealthRefresher(gitClient: gitClient, gitHubProbe: ghClient)
+        )
     }()
 
     @Environment(\.scenePhase) private var scenePhase
