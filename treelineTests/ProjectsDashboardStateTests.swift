@@ -496,6 +496,269 @@ struct ProjectsDashboardStateTests {
         #expect(state.healthByProjectID[project.id] == nil)
     }
 
+    @Test func isRefreshingReportsTrueWhileProbeIsInFlight() async throws {
+        let project = Project(
+            commonDirectoryPath: "/Users/dev/acme/.git",
+            primaryCheckoutPath: "/Users/dev/acme",
+            displayName: "acme"
+        )
+        let probe = ManualHealthProbe()
+        let state = ProjectsDashboardState(
+            projects: [project],
+            healthRefresher: probe
+        )
+
+        #expect(!state.isRefreshing(project))
+
+        let refreshTask = Task { await state.refreshHealth(for: project) }
+        // The state synchronously marks itself refreshing before awaiting,
+        // so a single yield is enough to surface the in-flight flag in tests.
+        while !state.isRefreshing(project) { await Task.yield() }
+
+        #expect(state.isRefreshing(project))
+        // Previous data isn't available yet, so the loading sentinel is what
+        // the dashboard sees while the probe runs.
+        #expect(state.health(for: project) == .loading)
+
+        let resolved = ProjectHealth(
+            status: .ready,
+            currentBranch: "main",
+            workingTree: .clean,
+            branchSync: nil,
+            worktreeCount: 1,
+            lastRefreshedAt: Date()
+        )
+        probe.complete(project.id, with: resolved)
+        await refreshTask.value
+
+        #expect(!state.isRefreshing(project))
+        #expect(state.health(for: project) == resolved)
+    }
+
+    @Test func cancelAllRefreshesDropsInFlightResultAndClearsFlag() async throws {
+        let project = Project(
+            commonDirectoryPath: "/Users/dev/acme/.git",
+            primaryCheckoutPath: "/Users/dev/acme",
+            displayName: "acme"
+        )
+        let probe = ManualHealthProbe()
+        let state = ProjectsDashboardState(
+            projects: [project],
+            healthRefresher: probe
+        )
+
+        let refreshTask = Task { await state.refreshHealth(for: project) }
+        while !state.isRefreshing(project) { await Task.yield() }
+
+        state.cancelAllRefreshes()
+        await refreshTask.value
+
+        // Cancellation drops the in-flight result so a screen switch or app
+        // deactivation can't clobber state with work the user no longer
+        // cares about. The loading sentinel set when refresh started remains.
+        #expect(state.health(for: project) == .loading)
+        #expect(!state.isRefreshing(project))
+    }
+
+    @Test func cancelAllRefreshesPreservesPriorSnapshotForRePresentation() async throws {
+        // When the user re-opens the dashboard after a cancelled refresh,
+        // the previous good data should still be visible — only the
+        // in-flight work was dropped.
+        let project = Project(
+            commonDirectoryPath: "/Users/dev/acme/.git",
+            primaryCheckoutPath: "/Users/dev/acme",
+            displayName: "acme"
+        )
+        let probe = ManualHealthProbe()
+        let state = ProjectsDashboardState(
+            projects: [project],
+            healthRefresher: probe
+        )
+
+        // First refresh seeds a snapshot.
+        let initialTask = Task { await state.refreshHealth(for: project) }
+        while !state.isRefreshing(project) { await Task.yield() }
+        let initial = ProjectHealth(
+            status: .ready,
+            currentBranch: "main",
+            workingTree: .clean,
+            branchSync: nil,
+            worktreeCount: 1,
+            lastRefreshedAt: Date()
+        )
+        probe.complete(project.id, with: initial)
+        await initialTask.value
+        #expect(state.health(for: project) == initial)
+
+        // Second refresh is cancelled mid-flight — the original snapshot
+        // must survive the cancellation rather than reverting to loading.
+        let cancelledTask = Task { await state.refreshHealth(for: project) }
+        while !state.isRefreshing(project) { await Task.yield() }
+        state.cancelAllRefreshes()
+        await cancelledTask.value
+
+        #expect(state.health(for: project) == initial)
+        #expect(!state.isRefreshing(project))
+    }
+
+    @Test func isStaleReportsTrueAfterStalenessThresholdElapses() async throws {
+        let fm = FileManager.default
+        let checkout = fm.temporaryDirectory.appendingPathComponent("treeline-stale-\(UUID().uuidString)")
+        try fm.createDirectory(at: checkout, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: checkout) }
+
+        let project = Project(
+            commonDirectoryPath: checkout.path + "/.git",
+            primaryCheckoutPath: checkout.path,
+            displayName: "acme"
+        )
+
+        let clock = MutableClock(Date(timeIntervalSince1970: 1_700_000_000))
+        let runner = FakeCLIRunner()
+        runner.stub(arguments: ["rev-parse", "--abbrev-ref", "HEAD"], stdout: "main\n")
+        runner.stub(arguments: ["status", "--porcelain"], stdout: "")
+        runner.stub(arguments: ["worktree", "list", "--porcelain"], stdout: "")
+
+        let refresher = ProjectHealthRefresher(
+            gitClient: GitClient(runner: runner),
+            now: { clock.now }
+        )
+        let state = ProjectsDashboardState(
+            projects: [project],
+            healthRefresher: refresher,
+            clock: { clock.now },
+            stalenessThreshold: 60
+        )
+
+        // No refresh yet → no prior data → not stale.
+        #expect(!state.isStale(for: project))
+
+        await state.refreshHealth(for: project)
+        #expect(state.health(for: project).status == .ready)
+        #expect(!state.isStale(for: project))
+
+        // Wall clock advances past the threshold. The data didn't change,
+        // but the dashboard now considers it stale and surfaces that.
+        clock.advance(by: 120)
+        #expect(state.isStale(for: project))
+    }
+
+    @Test func isStaleAppliesToDegradedSnapshotsToo() async throws {
+        // Failure rows can also go stale — the user should know that the
+        // "Couldn't reach git" message hasn't been re-checked in a while.
+        let project = Project(
+            commonDirectoryPath: "/Users/dev/gone/.git",
+            primaryCheckoutPath: "/Users/dev/definitely-missing-\(UUID().uuidString)",
+            displayName: "gone"
+        )
+        let clock = MutableClock(Date(timeIntervalSince1970: 1_700_000_000))
+        let refresher = ProjectHealthRefresher(
+            gitClient: GitClient(runner: FakeCLIRunner()),
+            now: { clock.now }
+        )
+        let state = ProjectsDashboardState(
+            projects: [project],
+            healthRefresher: refresher,
+            clock: { clock.now },
+            stalenessThreshold: 60
+        )
+
+        await state.refreshHealth(for: project)
+        if case .degraded = state.health(for: project).status {
+            // expected
+        } else {
+            Issue.record("expected degraded status, got \(state.health(for: project).status)")
+        }
+        #expect(!state.isStale(for: project))
+
+        clock.advance(by: 120)
+        #expect(state.isStale(for: project))
+    }
+
+    @Test func manualRefreshReplacesStaleSnapshotWithFreshOne() async throws {
+        // Pressing the refresh button on a stale row should run a new probe
+        // and clear the stale flag, regardless of how old the prior data was.
+        let fm = FileManager.default
+        let checkout = fm.temporaryDirectory.appendingPathComponent("treeline-manual-\(UUID().uuidString)")
+        try fm.createDirectory(at: checkout, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: checkout) }
+
+        let project = Project(
+            commonDirectoryPath: checkout.path + "/.git",
+            primaryCheckoutPath: checkout.path,
+            displayName: "acme"
+        )
+
+        let clock = MutableClock(Date(timeIntervalSince1970: 1_700_000_000))
+        let runner = FakeCLIRunner()
+        runner.stub(arguments: ["rev-parse", "--abbrev-ref", "HEAD"], stdout: "main\n")
+        runner.stub(arguments: ["status", "--porcelain"], stdout: "")
+        runner.stub(arguments: ["worktree", "list", "--porcelain"], stdout: "")
+
+        let refresher = ProjectHealthRefresher(
+            gitClient: GitClient(runner: runner),
+            now: { clock.now }
+        )
+        let state = ProjectsDashboardState(
+            projects: [project],
+            healthRefresher: refresher,
+            clock: { clock.now },
+            stalenessThreshold: 60
+        )
+
+        await state.refreshHealth(for: project)
+        let firstRefreshAt = state.health(for: project).lastRefreshedAt
+        #expect(firstRefreshAt != nil)
+
+        clock.advance(by: 600)
+        #expect(state.isStale(for: project))
+
+        await state.refreshHealth(for: project)
+        let secondRefreshAt = state.health(for: project).lastRefreshedAt
+        #expect(secondRefreshAt != nil)
+        #expect(secondRefreshAt! > firstRefreshAt!)
+        #expect(!state.isStale(for: project))
+    }
+
+    @Test func refreshAllHealthTriggersOneRefreshPerProject() async throws {
+        // Simulates the launch / focus-regain trigger: refreshing all health
+        // should drive each Project through the probe exactly once and leave
+        // none stuck in refreshing afterwards.
+        let projects = (0..<3).map { i in
+            Project(
+                commonDirectoryPath: "/Users/dev/p\(i)/.git",
+                primaryCheckoutPath: "/Users/dev/p\(i)",
+                displayName: "p\(i)"
+            )
+        }
+        let probe = ManualHealthProbe()
+        let state = ProjectsDashboardState(
+            projects: projects,
+            healthRefresher: probe
+        )
+
+        let refreshTask = Task { await state.refreshAllHealth() }
+        while probe.pendingCount < projects.count { await Task.yield() }
+        #expect(state.refreshingProjectIDs.count == projects.count)
+
+        for project in projects {
+            probe.complete(project.id, with: ProjectHealth(
+                status: .ready,
+                currentBranch: "main",
+                workingTree: .clean,
+                branchSync: nil,
+                worktreeCount: 1,
+                lastRefreshedAt: Date()
+            ))
+        }
+        await refreshTask.value
+
+        #expect(state.refreshingProjectIDs.isEmpty)
+        for project in projects {
+            #expect(state.health(for: project).status == .ready)
+        }
+    }
+
     @Test func addProjectSurfacesGitErrors() async throws {
         let runner = FakeCLIRunner()
         runner.stubFailure(
@@ -515,5 +778,66 @@ struct ProjectsDashboardStateTests {
             // expected
         }
         #expect(state.projects.isEmpty)
+    }
+}
+
+/// HealthProbing fake whose refresh calls suspend until the test resumes
+/// them explicitly. Used to verify the dashboard's in-flight indicator and
+/// cancellation behaviour without relying on real timing.
+final class ManualHealthProbe: HealthProbing, @unchecked Sendable {
+    private let lock = NSLock()
+    private var pending: [String: CheckedContinuation<ProjectHealth, Never>] = [:]
+
+    func refresh(_ project: Project) async -> ProjectHealth {
+        let projectID = project.id
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<ProjectHealth, Never>) in
+                lock.lock()
+                // Re-check cancellation under the lock to close the race
+                // where Task.cancel() runs between entering the operation
+                // and registering the continuation.
+                if Task.isCancelled {
+                    lock.unlock()
+                    continuation.resume(returning: .loading)
+                    return
+                }
+                pending[projectID] = continuation
+                lock.unlock()
+            }
+        } onCancel: { [weak self] in
+            guard let self else { return }
+            self.lock.lock()
+            let cont = self.pending.removeValue(forKey: projectID)
+            self.lock.unlock()
+            cont?.resume(returning: .loading)
+        }
+    }
+
+    func complete(_ projectID: String, with health: ProjectHealth) {
+        lock.lock()
+        let cont = pending.removeValue(forKey: projectID)
+        lock.unlock()
+        cont?.resume(returning: health)
+    }
+
+    var pendingCount: Int {
+        lock.lock(); defer { lock.unlock() }
+        return pending.count
+    }
+}
+
+/// A clock whose value can be advanced from the test body, used to verify
+/// staleness without sleeping the test process.
+final class MutableClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var current: Date
+    init(_ initial: Date) { self.current = initial }
+    var now: Date {
+        lock.lock(); defer { lock.unlock() }
+        return current
+    }
+    func advance(by seconds: TimeInterval) {
+        lock.lock(); defer { lock.unlock() }
+        current = current.addingTimeInterval(seconds)
     }
 }

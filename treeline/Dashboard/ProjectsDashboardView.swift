@@ -51,9 +51,16 @@ struct ProjectsDashboardView: View {
             }
         }
         .task {
-            // Initial refresh on dashboard appear. Each Project resolves
-            // independently — one failing repo never blocks the others.
+            // Initial refresh on dashboard appear, after Projects have been
+            // loaded from the store. Each Project resolves independently —
+            // one failing repo never blocks the others.
             await state.refreshAllHealth()
+        }
+        .onChange(of: state.activeProjectID) { _, newValue in
+            // Navigating into a Project detail counts as switching screens
+            // for the purposes of the PRD: the dashboard isn't on screen so
+            // any in-flight refreshes should be dropped.
+            if newValue != nil { state.cancelAllRefreshes() }
         }
         .alert(
             "Couldn't add Project",
@@ -123,7 +130,12 @@ struct ProjectsDashboardView: View {
     private var projectList: some View {
         List(state.projects) { project in
             NavigationLink(value: project) {
-                ProjectRowView(project: project, health: state.health(for: project))
+                ProjectRowView(
+                    project: project,
+                    health: state.health(for: project),
+                    isRefreshing: state.isRefreshing(project),
+                    isStale: state.isStale(for: project)
+                )
             }
             .contextMenu {
                 Button("Refresh Health") {

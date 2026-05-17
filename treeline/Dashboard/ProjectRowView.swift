@@ -3,6 +3,8 @@ import SwiftUI
 struct ProjectRowView: View {
     let project: Project
     let health: ProjectHealth
+    var isRefreshing: Bool = false
+    var isStale: Bool = false
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -13,6 +15,22 @@ struct ProjectRowView: View {
                 HStack(spacing: 8) {
                     Text(project.displayName)
                         .font(.headline)
+                    if isRefreshing && health.lastRefreshedAt != nil {
+                        // Re-refresh while a previous snapshot is on screen —
+                        // a small spinner reassures the user that data is
+                        // being updated without flashing the row back to
+                        // "loading".
+                        ProgressView()
+                            .controlSize(.mini)
+                            .accessibilityLabel(Text("Refreshing"))
+                    }
+                    if isStale {
+                        Label("Stale", systemImage: "clock.badge.exclamationmark")
+                            .labelStyle(.iconOnly)
+                            .foregroundStyle(.secondary)
+                            .help("Dashboard data hasn't been refreshed recently")
+                            .accessibilityLabel(Text("Stale data"))
+                    }
                     if case .degraded(let reason) = health.status {
                         Label("Degraded", systemImage: "exclamationmark.triangle.fill")
                             .labelStyle(.iconOnly)
@@ -176,6 +194,48 @@ struct ProjectRowView: View {
             displayName: "x"
         ),
         health: .loading
+    )
+    .padding()
+}
+
+#Preview("Stale") {
+    ProjectRowView(
+        project: Project(
+            commonDirectoryPath: "/x/.git",
+            primaryCheckoutPath: "/x",
+            displayName: "treeline"
+        ),
+        health: ProjectHealth(
+            status: .ready,
+            currentBranch: "main",
+            workingTree: .clean,
+            branchSync: .upToDate,
+            worktreeCount: 1,
+            lastRefreshedAt: Date(timeIntervalSinceNow: -600)
+        ),
+        isRefreshing: false,
+        isStale: true
+    )
+    .padding()
+}
+
+#Preview("Refreshing") {
+    ProjectRowView(
+        project: Project(
+            commonDirectoryPath: "/x/.git",
+            primaryCheckoutPath: "/x",
+            displayName: "treeline"
+        ),
+        health: ProjectHealth(
+            status: .ready,
+            currentBranch: "main",
+            workingTree: .clean,
+            branchSync: .upToDate,
+            worktreeCount: 1,
+            lastRefreshedAt: Date()
+        ),
+        isRefreshing: true,
+        isStale: false
     )
     .padding()
 }

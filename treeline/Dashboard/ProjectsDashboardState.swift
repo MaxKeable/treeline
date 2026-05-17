@@ -1,22 +1,41 @@
 import Foundation
 
+/// Abstracts the health-probing surface used by the dashboard so tests can
+/// inject a controllable fake (e.g. to verify cancellation behaviour). The
+/// concrete `ProjectHealthRefresher` conforms in production.
+protocol HealthProbing: Sendable {
+    func refresh(_ project: Project) async -> ProjectHealth
+}
+
 /// Observable state for the Projects dashboard.
 ///
 /// Holds the loaded Projects, resolves newly added paths through `GitClient`,
 /// de-duplicates by canonical git common directory, attaches sibling
 /// checkouts and worktrees to existing Projects, persists changes through
 /// `ProjectStore`, and tracks which Project is currently active so the next
-/// launch can reopen it. Branch state, sync state, capability flags, and
-/// refresh orchestration belong in later slices.
+/// launch can reopen it. Refreshes are tracked per Project so the UI can
+/// show in-flight, stale, success, and failure states, and so a screen
+/// switch or app deactivation can cancel work that the user no longer
+/// needs.
 @MainActor
 @Observable
 final class ProjectsDashboardState {
+    /// How long a refreshed snapshot is considered "fresh" before the
+    /// dashboard renders it as stale. Picked well under any future polling
+    /// interval so the user can spot dashboards that haven't been refreshed
+    /// since they last opened the app or stepped away.
+    static let defaultStalenessThreshold: TimeInterval = 120
+
     private(set) var projects: [Project]
     private(set) var activeProjectID: String?
     /// Health per Project ID, populated lazily by `refreshHealth`. Projects
     /// with no entry are treated as `.loading` by `health(for:)` so the
     /// dashboard can render before the first refresh completes.
     private(set) var healthByProjectID: [String: ProjectHealth] = [:]
+    /// Project IDs with a currently in-flight refresh. Drives the dashboard's
+    /// "refreshing" indicator independently of the stored health snapshot, so
+    /// the previous snapshot stays visible while the new probe runs.
+    private(set) var refreshingProjectIDs: Set<String> = []
     var lastAddError: String?
     /// Transient message shown when a selected path was attached to an
     /// existing Project rather than creating a new one. The view surfaces
@@ -25,19 +44,34 @@ final class ProjectsDashboardState {
 
     private let store: ProjectStore?
     private let gitClient: GitClient?
-    private let healthRefresher: ProjectHealthRefresher?
+    private let healthProbe: (any HealthProbing)?
+    private let clock: @Sendable () -> Date
+    let stalenessThreshold: TimeInterval
+
+    /// Tracks the in-flight refresh task per Project so `cancelAllRefreshes`
+    /// and replacement calls can both cooperatively stop work in progress.
+    private var refreshTasks: [String: Task<Void, Never>] = [:]
+    /// Per-Project sequence number, bumped on every refresh launch. The post-
+    /// await cleanup only clears tracking state if its token still matches —
+    /// otherwise a newer refresh has already taken over and owns the entry.
+    private var refreshSeq: [String: Int] = [:]
+    private var nextRefreshSeq: Int = 0
 
     init(
         projects: [Project] = [],
         activeProjectID: String? = nil,
         store: ProjectStore? = nil,
         gitClient: GitClient? = nil,
-        healthRefresher: ProjectHealthRefresher? = nil
+        healthRefresher: (any HealthProbing)? = nil,
+        clock: @escaping @Sendable () -> Date = { Date() },
+        stalenessThreshold: TimeInterval = ProjectsDashboardState.defaultStalenessThreshold
     ) {
         self.projects = projects
         self.store = store
         self.gitClient = gitClient
-        self.healthRefresher = healthRefresher
+        self.healthProbe = healthRefresher
+        self.clock = clock
+        self.stalenessThreshold = stalenessThreshold
         // Drop a dangling reference so callers never see an "active" project
         // that isn't in the projects list (e.g. the repo was removed between
         // launches).
@@ -67,40 +101,96 @@ final class ProjectsDashboardState {
         healthByProjectID[project.id] ?? .loading
     }
 
+    /// Whether a refresh is currently in flight for this Project. The
+    /// dashboard uses this to show a refresh indicator without discarding
+    /// the previous snapshot.
+    func isRefreshing(_ project: Project) -> Bool {
+        refreshingProjectIDs.contains(project.id)
+    }
+
+    /// Whether the stored snapshot is older than the configured staleness
+    /// threshold. Loading rows and rows that have never been refreshed are
+    /// not stale — there is no prior data to be stale about.
+    func isStale(for project: Project) -> Bool {
+        let snapshot = health(for: project)
+        guard case .loading = snapshot.status else {
+            return staleSince(snapshot.lastRefreshedAt)
+        }
+        // A row still on the loading sentinel hasn't produced a snapshot yet,
+        // so don't paint it as stale.
+        if snapshot.lastRefreshedAt == nil { return false }
+        return staleSince(snapshot.lastRefreshedAt)
+    }
+
+    private func staleSince(_ date: Date?) -> Bool {
+        guard let date else { return false }
+        return clock().timeIntervalSince(date) > stalenessThreshold
+    }
+
     /// Refresh one Project's health without touching any other Project's
-    /// state. The Project's row flips to `.loading` while the probe runs and
-    /// the result is dropped if the Project was removed mid-refresh.
+    /// state. The previous snapshot stays visible while the new probe runs
+    /// so the dashboard never flashes back to "loading…" on a re-refresh.
+    /// Cancellable through `cancelAllRefreshes()`.
     func refreshHealth(for project: Project) async {
-        guard let healthRefresher else { return }
+        guard let healthProbe else { return }
         guard projects.contains(where: { $0.id == project.id }) else { return }
+
+        // Replace any in-flight refresh for this Project — the newer request
+        // wins and the older one's result is discarded.
+        refreshTasks[project.id]?.cancel()
+
         if healthByProjectID[project.id] == nil {
             healthByProjectID[project.id] = .loading
         }
-        let updated = await healthRefresher.refresh(project)
-        guard projects.contains(where: { $0.id == project.id }) else { return }
-        healthByProjectID[project.id] = updated
+
+        nextRefreshSeq += 1
+        let token = nextRefreshSeq
+        refreshSeq[project.id] = token
+        refreshingProjectIDs.insert(project.id)
+
+        let projectID = project.id
+        let task = Task<Void, Never> { @MainActor [weak self] in
+            let updated = await healthProbe.refresh(project)
+            // Cancellation observed after the probe returns: drop the result
+            // so a screen switch or app deactivation can't clobber state
+            // with a snapshot the user no longer cares about.
+            if Task.isCancelled { return }
+            guard let self else { return }
+            guard self.projects.contains(where: { $0.id == projectID }) else { return }
+            self.healthByProjectID[projectID] = updated
+        }
+        refreshTasks[projectID] = task
+        await task.value
+
+        // Only clear tracking state if no newer refresh has taken over.
+        if refreshSeq[projectID] == token {
+            refreshSeq.removeValue(forKey: projectID)
+            refreshTasks.removeValue(forKey: projectID)
+            refreshingProjectIDs.remove(projectID)
+        }
     }
 
     /// Refresh every Project's health. Errors on one Project never affect
     /// the others — each refresh resolves to either ready or degraded health.
     func refreshAllHealth() async {
         let snapshot = projects
-        await withTaskGroup(of: (String, ProjectHealth).self) { group in
-            guard let healthRefresher else { return }
+        await withTaskGroup(of: Void.self) { group in
             for project in snapshot {
-                if healthByProjectID[project.id] == nil {
-                    healthByProjectID[project.id] = .loading
-                }
-                group.addTask {
-                    (project.id, await healthRefresher.refresh(project))
-                }
-            }
-            for await (id, health) in group {
-                if projects.contains(where: { $0.id == id }) {
-                    healthByProjectID[id] = health
+                group.addTask { @MainActor [weak self] in
+                    await self?.refreshHealth(for: project)
                 }
             }
         }
+    }
+
+    /// Cancel every in-flight refresh and clear the in-flight set. The
+    /// dashboard calls this when the user navigates away or the app loses
+    /// active focus so we don't keep probing git for views the user can't see.
+    func cancelAllRefreshes() {
+        for task in refreshTasks.values { task.cancel() }
+        refreshTasks.removeAll()
+        refreshSeq.removeAll()
+        refreshingProjectIDs.removeAll()
     }
 
     var isEmpty: Bool { projects.isEmpty }

@@ -5,7 +5,7 @@ import Foundation
 /// status with a human-readable reason instead of throwing, so a single bad
 /// repo (missing path, missing git, repo corruption) can never block the rest
 /// of the dashboard.
-struct ProjectHealthRefresher: Sendable {
+struct ProjectHealthRefresher: HealthProbing, Sendable {
     let gitClient: GitClient
     let fileManager: FileManager
     let now: @Sendable () -> Date

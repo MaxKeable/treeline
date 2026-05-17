@@ -10,9 +10,26 @@ struct treelineApp: App {
         return ProjectsDashboardState(gitClient: gitClient)
     }()
 
+    @Environment(\.scenePhase) private var scenePhase
+
     var body: some Scene {
         WindowGroup {
             ProjectsDashboardView(state: dashboardState)
+                .onChange(of: scenePhase) { _, phase in
+                    switch phase {
+                    case .active:
+                        // Regaining focus (or coming back from miniaturized
+                        // / background) should produce fresh dashboard data
+                        // without the user clicking refresh.
+                        Task { await dashboardState.refreshAllHealth() }
+                    case .inactive, .background:
+                        // The user can no longer see the dashboard, so
+                        // drop any work that would only matter on screen.
+                        dashboardState.cancelAllRefreshes()
+                    @unknown default:
+                        break
+                    }
+                }
         }
     }
 }
