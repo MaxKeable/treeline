@@ -205,6 +205,18 @@ struct ProjectsDashboardStateTests {
         // worktrees) resolves to the same common directory.
         runner.stub(arguments: ["rev-parse", "--show-toplevel"], stdout: "/Users/dev/acme-wt\n")
         runner.stub(arguments: ["rev-parse", "--git-common-dir"], stdout: "/Users/dev/acme/.git\n")
+        runner.stub(
+            arguments: ["worktree", "list", "--porcelain"],
+            stdout: """
+            worktree /Users/dev/acme
+            HEAD abc
+            branch refs/heads/main
+
+            worktree /Users/dev/acme-wt
+            HEAD def
+            branch refs/heads/feature
+            """
+        )
 
         let state = ProjectsDashboardState(
             projects: [existing],
@@ -213,8 +225,149 @@ struct ProjectsDashboardStateTests {
 
         let outcome = try await state.addProject(at: URL(fileURLWithPath: "/Users/dev/acme-wt"))
 
-        #expect(outcome == .attachedToExisting(existing))
+        guard case .attachedToExisting(let attached) = outcome else {
+            Issue.record("expected .attachedToExisting outcome, got \(outcome)")
+            return
+        }
         #expect(state.projects.count == 1)
+        // Identity (and so the dashboard row) is unchanged.
+        #expect(attached.id == existing.id)
+        #expect(attached.primaryCheckoutPath == existing.primaryCheckoutPath)
+        #expect(attached.displayName == existing.displayName)
+        // The attached worktree is now tracked alongside the original primary.
+        #expect(attached.checkoutPaths == ["/Users/dev/acme", "/Users/dev/acme-wt"])
+        // A non-blocking confirmation is set so the view can surface it.
+        #expect(state.attachedNotice != nil)
+    }
+
+    @Test func addProjectAttachesFromNestedPathInsideWorktree() async throws {
+        let existing = Project(
+            commonDirectoryPath: "/Users/dev/acme/.git",
+            primaryCheckoutPath: "/Users/dev/acme",
+            displayName: "acme"
+        )
+
+        let runner = FakeCLIRunner()
+        // User picked a folder buried inside a worktree (e.g. `src/feature`).
+        // git resolves it to the worktree root, which shares the common dir.
+        runner.stub(arguments: ["rev-parse", "--show-toplevel"], stdout: "/Users/dev/acme-wt\n")
+        runner.stub(arguments: ["rev-parse", "--git-common-dir"], stdout: "/Users/dev/acme/.git\n")
+        runner.stub(
+            arguments: ["worktree", "list", "--porcelain"],
+            stdout: """
+            worktree /Users/dev/acme
+            HEAD abc
+            branch refs/heads/main
+
+            worktree /Users/dev/acme-wt
+            HEAD def
+            branch refs/heads/feature
+            """
+        )
+
+        let state = ProjectsDashboardState(
+            projects: [existing],
+            gitClient: GitClient(runner: runner)
+        )
+
+        let outcome = try await state.addProject(
+            at: URL(fileURLWithPath: "/Users/dev/acme-wt/src/feature")
+        )
+
+        guard case .attachedToExisting(let attached) = outcome else {
+            Issue.record("expected .attachedToExisting outcome, got \(outcome)")
+            return
+        }
+        #expect(state.projects.count == 1)
+        #expect(attached.primaryCheckoutPath == "/Users/dev/acme")
+        #expect(attached.checkoutPaths.contains("/Users/dev/acme-wt"))
+    }
+
+    @Test func addProjectPreservesPrimaryCheckoutWhenAttaching() async throws {
+        let existing = Project(
+            commonDirectoryPath: "/Users/dev/acme/.git",
+            primaryCheckoutPath: "/Users/dev/acme",
+            displayName: "acme"
+        )
+
+        let runner = FakeCLIRunner()
+        runner.stub(arguments: ["rev-parse", "--show-toplevel"], stdout: "/Users/dev/acme-wt\n")
+        runner.stub(arguments: ["rev-parse", "--git-common-dir"], stdout: "/Users/dev/acme/.git\n")
+        runner.stub(arguments: ["worktree", "list", "--porcelain"], stdout: "")
+
+        let state = ProjectsDashboardState(
+            projects: [existing],
+            gitClient: GitClient(runner: runner)
+        )
+
+        _ = try await state.addProject(at: URL(fileURLWithPath: "/Users/dev/acme-wt"))
+
+        // Even though the user is now adding a different checkout, the
+        // originally-added one stays primary so the dashboard label and
+        // restored-on-launch path don't shift under them.
+        #expect(state.projects[0].primaryCheckoutPath == "/Users/dev/acme")
+        #expect(state.projects[0].displayName == "acme")
+    }
+
+    @Test func addProjectRecordsDiscoveredWorktreesOnFirstAdd() async throws {
+        let fm = FileManager.default
+        let storeURL = fm.temporaryDirectory
+            .appendingPathComponent("treeline-discover-\(UUID().uuidString)")
+            .appendingPathComponent("projects.json")
+        defer { try? fm.removeItem(at: storeURL.deletingLastPathComponent()) }
+
+        let runner = FakeCLIRunner()
+        runner.stub(arguments: ["rev-parse", "--show-toplevel"], stdout: "/Users/dev/acme\n")
+        runner.stub(arguments: ["rev-parse", "--git-common-dir"], stdout: "/Users/dev/acme/.git\n")
+        runner.stub(
+            arguments: ["worktree", "list", "--porcelain"],
+            stdout: """
+            worktree /Users/dev/acme
+            HEAD abc
+            branch refs/heads/main
+
+            worktree /Users/dev/acme-wt
+            HEAD def
+            branch refs/heads/feature
+            """
+        )
+
+        let state = ProjectsDashboardState(
+            store: ProjectStore(fileURL: storeURL),
+            gitClient: GitClient(runner: runner)
+        )
+
+        let outcome = try await state.addProject(at: URL(fileURLWithPath: "/Users/dev/acme"))
+        guard case .added(let added) = outcome else {
+            Issue.record("expected .added outcome, got \(outcome)")
+            return
+        }
+        #expect(added.checkoutPaths == ["/Users/dev/acme", "/Users/dev/acme-wt"])
+
+        let reloaded = ProjectStore(fileURL: storeURL).load()
+        #expect(reloaded.projects.first?.checkoutPaths == ["/Users/dev/acme", "/Users/dev/acme-wt"])
+    }
+
+    @Test func addProjectSucceedsWhenWorktreeDiscoveryFails() async throws {
+        // Older git versions or non-standard repos may fail `git worktree
+        // list --porcelain`. Adding the Project should still succeed; we
+        // just record the primary checkout alone.
+        let runner = FakeCLIRunner()
+        runner.stub(arguments: ["rev-parse", "--show-toplevel"], stdout: "/Users/dev/acme\n")
+        runner.stub(arguments: ["rev-parse", "--git-common-dir"], stdout: "/Users/dev/acme/.git\n")
+        runner.stubFailure(
+            arguments: ["worktree", "list", "--porcelain"],
+            error: .nonZeroExit(status: 1, standardError: "boom", standardOutput: "")
+        )
+
+        let state = ProjectsDashboardState(gitClient: GitClient(runner: runner))
+        let outcome = try await state.addProject(at: URL(fileURLWithPath: "/Users/dev/acme"))
+
+        guard case .added(let added) = outcome else {
+            Issue.record("expected .added outcome, got \(outcome)")
+            return
+        }
+        #expect(added.checkoutPaths == ["/Users/dev/acme"])
     }
 
     @Test func addProjectSurfacesGitErrors() async throws {

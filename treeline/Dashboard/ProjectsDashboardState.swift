@@ -3,7 +3,8 @@ import Foundation
 /// Observable state for the Projects dashboard.
 ///
 /// Holds the loaded Projects, resolves newly added paths through `GitClient`,
-/// de-duplicates by canonical git common directory, persists changes through
+/// de-duplicates by canonical git common directory, attaches sibling
+/// checkouts and worktrees to existing Projects, persists changes through
 /// `ProjectStore`, and tracks which Project is currently active so the next
 /// launch can reopen it. Branch state, sync state, capability flags, and
 /// refresh orchestration belong in later slices.
@@ -13,6 +14,10 @@ final class ProjectsDashboardState {
     private(set) var projects: [Project]
     private(set) var activeProjectID: String?
     var lastAddError: String?
+    /// Transient message shown when a selected path was attached to an
+    /// existing Project rather than creating a new one. The view surfaces
+    /// this as a non-blocking banner and clears it after a short delay.
+    var attachedNotice: String?
 
     private let store: ProjectStore?
     private let gitClient: GitClient?
@@ -70,19 +75,38 @@ final class ProjectsDashboardState {
         case attachedToExisting(Project)
     }
 
-    /// Resolve the selected path to a git identity, then either add a new
-    /// Project or report that the path already belongs to a known one. The
-    /// originally added path becomes the primary checkout for new Projects.
+    /// Resolve the selected path to a git identity, discover sibling
+    /// worktrees, then either add a new Project or attach the selected path
+    /// (and any newly discovered worktrees) to the existing Project that
+    /// shares the same git common directory. The original primary checkout
+    /// is preserved on attach.
     @discardableResult
     func addProject(at selectedPath: URL) async throws -> AddOutcome {
         guard let gitClient else {
             throw AddProjectError.notConfigured
         }
         let identity = try await gitClient.resolveIdentity(at: selectedPath)
-        if let existing = projects.first(where: { $0.commonDirectoryPath == identity.commonDirectory.path }) {
+        // Worktree discovery is best-effort: a missing git binary or a repo
+        // version older than `git worktree list --porcelain` must not block
+        // adding the Project. Failure just means we only record what the
+        // user explicitly selected.
+        let discovered = (try? await gitClient.listWorktreePaths(at: identity.checkoutRoot)) ?? []
+
+        if let existingIndex = projects.firstIndex(where: {
+            $0.commonDirectoryPath == identity.commonDirectory.path
+        }) {
+            var existing = projects[existingIndex]
+            var merged = Set(existing.checkoutPaths)
+            merged.insert(identity.checkoutRoot.path)
+            for url in discovered { merged.insert(url.path) }
+            existing.checkoutPaths = merged.sorted()
+            projects[existingIndex] = existing
+            try persist()
+            attachedNotice = "Attached to existing Project “\(existing.displayName)”"
             return .attachedToExisting(existing)
         }
-        let project = Project(identity: identity)
+
+        let project = Project(identity: identity, discoveredCheckouts: discovered)
         projects.append(project)
         try persist()
         return .added(project)

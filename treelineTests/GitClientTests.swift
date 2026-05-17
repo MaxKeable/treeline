@@ -75,6 +75,99 @@ struct GitClientTests {
         }
     }
 
+    @Test func parsesWorktreePorcelainOutput() {
+        let porcelain = """
+        worktree /Users/dev/acme
+        HEAD abc123
+        branch refs/heads/main
+
+        worktree /Users/dev/acme-feature
+        HEAD def456
+        branch refs/heads/feature
+
+        worktree /Users/dev/acme-detached
+        HEAD 789aaa
+        detached
+
+        """
+        let paths = GitClient.parseWorktreePaths(porcelain).map { $0.path }
+        #expect(paths == [
+            "/Users/dev/acme",
+            "/Users/dev/acme-feature",
+            "/Users/dev/acme-detached"
+        ])
+    }
+
+    @Test func parsesWorktreePorcelainWithLockedAndPrunableFlags() {
+        let porcelain = """
+        worktree /Users/dev/acme
+        HEAD abc
+        branch refs/heads/main
+
+        worktree /Users/dev/acme-old
+        HEAD def
+        branch refs/heads/old
+        locked stale checkout
+        prunable
+        """
+        let paths = GitClient.parseWorktreePaths(porcelain).map { $0.path }
+        #expect(paths == ["/Users/dev/acme", "/Users/dev/acme-old"])
+    }
+
+    @Test func parsesWorktreePorcelainSkipsBlankAndUnknownLines() {
+        // Empty input and noisy input should both yield no false positives.
+        #expect(GitClient.parseWorktreePaths("").isEmpty)
+        #expect(GitClient.parseWorktreePaths("\n\n\n").isEmpty)
+        #expect(GitClient.parseWorktreePaths("HEAD abc\nbranch refs/heads/main\n").isEmpty)
+    }
+
+    @Test func listWorktreePathsReturnsCanonicalizedPaths() async throws {
+        let fm = FileManager.default
+        let checkout = fm.temporaryDirectory
+            .appendingPathComponent("treeline-worktree-list-\(UUID().uuidString)")
+        try fm.createDirectory(at: checkout, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: checkout) }
+
+        let runner = FakeCLIRunner()
+        let porcelain = """
+        worktree \(checkout.path)
+        HEAD abc
+        branch refs/heads/main
+
+        worktree \(checkout.path)-wt
+        HEAD def
+        branch refs/heads/feature
+        """
+        runner.stub(arguments: ["worktree", "list", "--porcelain"], stdout: porcelain)
+
+        let client = GitClient(runner: runner)
+        let paths = try await client.listWorktreePaths(at: checkout)
+        let expected = [
+            GitClient.canonicalize(checkout).path,
+            GitClient.canonicalize(URL(fileURLWithPath: "\(checkout.path)-wt")).path
+        ]
+        #expect(paths.map { $0.path } == expected)
+    }
+
+    @Test func listWorktreePathsSurfacesCLIErrorsAsNotInsideRepository() async throws {
+        let runner = FakeCLIRunner()
+        runner.stubFailure(
+            arguments: ["worktree", "list", "--porcelain"],
+            error: .nonZeroExit(
+                status: 128,
+                standardError: "fatal: not a git repository\n",
+                standardOutput: ""
+            )
+        )
+        let client = GitClient(runner: runner)
+        do {
+            _ = try await client.listWorktreePaths(at: URL(fileURLWithPath: "/tmp"))
+            Issue.record("expected notInsideRepository error")
+        } catch let GitClientError.notInsideRepository(_, underlying) {
+            #expect(underlying.contains("not a git repository"))
+        }
+    }
+
     @Test func relativeCommonDirIsResolvedAgainstWorkingDirectory() async throws {
         let fm = FileManager.default
         let checkout = fm.temporaryDirectory.appendingPathComponent("treeline-relcommon-\(UUID().uuidString)")
