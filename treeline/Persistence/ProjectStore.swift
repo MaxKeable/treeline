@@ -2,16 +2,23 @@ import Foundation
 
 /// Versioned JSON payload written to Application Support. Versioning lets
 /// later slices migrate as the Project model grows (worktrees, GitHub
-/// metadata, last-active selection, etc.).
+/// metadata, etc.). `lastActiveProjectID` is optional so older payloads
+/// decode cleanly and so downgrades that drop the field still round-trip.
 struct PersistedProjectState: Codable, Equatable {
     static let currentSchemaVersion = 1
 
     var schemaVersion: Int
     var projects: [Project]
+    var lastActiveProjectID: String?
 
-    init(schemaVersion: Int = Self.currentSchemaVersion, projects: [Project] = []) {
+    init(
+        schemaVersion: Int = Self.currentSchemaVersion,
+        projects: [Project] = [],
+        lastActiveProjectID: String? = nil
+    ) {
         self.schemaVersion = schemaVersion
         self.projects = projects
+        self.lastActiveProjectID = lastActiveProjectID
     }
 }
 
@@ -39,21 +46,20 @@ struct ProjectStore {
         return treelineDir.appendingPathComponent("projects.json")
     }
 
-    func load() -> [Project] {
+    func load() -> PersistedProjectState {
         guard let data = try? Data(contentsOf: fileURL), !data.isEmpty else {
-            return []
+            return PersistedProjectState()
         }
         guard let state = try? JSONDecoder().decode(PersistedProjectState.self, from: data) else {
-            return []
+            return PersistedProjectState()
         }
         guard state.schemaVersion <= PersistedProjectState.currentSchemaVersion else {
-            return []
+            return PersistedProjectState()
         }
-        return state.projects
+        return state
     }
 
-    func save(_ projects: [Project]) throws {
-        let state = PersistedProjectState(projects: projects)
+    func save(_ state: PersistedProjectState) throws {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         let data = try encoder.encode(state)
