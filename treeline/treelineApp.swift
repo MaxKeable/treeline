@@ -1,17 +1,18 @@
-//
-//  treelineApp.swift
-//  treeline
-//
-//  Created by Max Keable  on 9/5/2026.
-//
-
 import SwiftUI
 
 @main
 struct treelineApp: App {
+    @State private var dashboardState: ProjectsDashboardState = {
+        let gitClient = GitClient(runner: CLIRunner())
+        if let url = try? ProjectStore.defaultURL() {
+            return ProjectsDashboardState(store: ProjectStore(fileURL: url), gitClient: gitClient)
+        }
+        return ProjectsDashboardState(gitClient: gitClient)
+    }()
+
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            ProjectsDashboardView(state: dashboardState)
         }
     }
 }
