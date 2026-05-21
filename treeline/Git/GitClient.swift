@@ -471,6 +471,20 @@ struct GitClient: Sendable {
         }
     }
 
+    /// Rename a local branch. `git branch -m <old> <new>` works whether the
+    /// branch is currently checked out or not, and refuses (with a clear
+    /// error surfaced in the action sheet) if `new` already exists — that's
+    /// the desired safety behaviour. No `-M` (force) variant in v1: a rename
+    /// that clobbers another branch is rarely what the user actually wants.
+    ///
+    /// Doesn't touch the working tree, so the dirty-tree guard stays off.
+    func renameAction(from oldName: String, to newName: String) -> ActionInvocation {
+        ActionInvocation(
+            arguments: ["branch", "-m", oldName, newName],
+            requiresCleanWorkingTree: false
+        )
+    }
+
     func switchAction(toLocal name: String) -> ActionInvocation {
         ActionInvocation(arguments: ["switch", name], requiresCleanWorkingTree: true)
     }

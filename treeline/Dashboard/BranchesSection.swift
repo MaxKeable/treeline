@@ -17,6 +17,10 @@ struct BranchesSection: View {
     @State private var filterText: String = ""
     @State private var isPresentingNewBranchSheet = false
     @State private var isPresentingCommitSheet = false
+    /// When non-nil, the rename sheet is presented for this branch. Holding
+    /// the listing itself (not just a name) lets us show the original name in
+    /// the sheet header without re-looking it up.
+    @State private var branchPendingRename: BranchListing?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -52,6 +56,17 @@ struct BranchesSection: View {
                 onCreate: { name, base, checkout in
                     isPresentingNewBranchSheet = false
                     state.runCreateBranch(name: name, base: base, checkout: checkout)
+                }
+            )
+        }
+        .sheet(item: $branchPendingRename) { listing in
+            RenameBranchSheet(
+                originalName: listing.shortName,
+                existingLocalNames: localBranchNames,
+                onCancel: { branchPendingRename = nil },
+                onRename: { newName in
+                    branchPendingRename = nil
+                    state.runRename(from: listing.shortName, to: newName)
                 }
             )
         }
@@ -152,7 +167,10 @@ struct BranchesSection: View {
                             changedFileCount: listing.isCurrent ? state.changedFileCount : nil,
                             isSwitchDisabled: switchDisabled(for: listing),
                             switchDisabledReason: switchDisabledReason(for: listing),
-                            onSwitch: { state.runSwitch(to: listing) }
+                            onSwitch: { state.runSwitch(to: listing) },
+                            onRename: listing.kind == .local
+                                ? { branchPendingRename = listing }
+                                : nil
                         )
                         Divider()
                     }
@@ -176,6 +194,13 @@ struct BranchesSection: View {
 
     private var branchNames: [String] {
         state.branches.map(\.displayName)
+    }
+
+    /// Just the local branch names, used by the rename sheet for client-side
+    /// collision detection. Remote-tracking refs don't matter here because
+    /// `git branch -m` only conflicts with other local branches.
+    private var localBranchNames: [String] {
+        state.branches.compactMap { $0.kind == .local ? $0.shortName : nil }
     }
 
     private var hasUpstreamForCurrent: Bool {
@@ -233,6 +258,11 @@ private struct BranchRow: View {
     let isSwitchDisabled: Bool
     let switchDisabledReason: String?
     let onSwitch: () -> Void
+    /// `nil` when rename isn't supported for this row (i.e. remote-tracking
+    /// refs). When present, surfaced both in the context menu and as an
+    /// overflow menu next to the Switch button so the action is discoverable
+    /// even for users who don't reach for right-click.
+    let onRename: (() -> Void)?
 
     var body: some View {
         HStack(spacing: 10) {
@@ -277,10 +307,28 @@ private struct BranchRow: View {
             .controlSize(.small)
             .disabled(isSwitchDisabled)
             .help(switchDisabledReason ?? "")
+            if let onRename {
+                // Overflow menu next to the Switch button so the action is
+                // discoverable without forcing users to know about right-click.
+                Menu {
+                    Button("Rename…", action: onRename)
+                } label: {
+                    Image(systemName: "ellipsis")
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help("More actions for \(listing.displayName)")
+            }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
         .background(isCurrent ? Color.accentColor.opacity(0.05) : Color.clear)
+        .contextMenu {
+            if let onRename {
+                Button("Rename “\(listing.displayName)”…", action: onRename)
+            }
+        }
     }
 
     private var icon: String {
@@ -352,6 +400,81 @@ private struct NewBranchSheet: View {
         }
         .padding(20)
         .frame(minWidth: 420)
+    }
+}
+
+/// Sheet for renaming a local branch. Surfaces a textfield seeded with the
+/// original name so common edits (typo, capitalization) are one or two key
+/// presses. Does client-side collision detection against the current list of
+/// local branches; git's own check is still authoritative — this just gives
+/// the user a faster signal before they click Rename.
+private struct RenameBranchSheet: View {
+    var originalName: String
+    var existingLocalNames: [String]
+    var onCancel: () -> Void
+    var onRename: (_ newName: String) -> Void
+
+    @State private var newName: String
+
+    init(
+        originalName: String,
+        existingLocalNames: [String],
+        onCancel: @escaping () -> Void,
+        onRename: @escaping (_ newName: String) -> Void
+    ) {
+        self.originalName = originalName
+        self.existingLocalNames = existingLocalNames
+        self.onCancel = onCancel
+        self.onRename = onRename
+        _newName = State(initialValue: originalName)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Rename Branch")
+                .font(.headline)
+            Text("Renaming “\(originalName)”")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("New name")
+                    .font(.subheadline)
+                TextField(originalName, text: $newName)
+                    .textFieldStyle(.roundedBorder)
+                if let problem = validationProblem {
+                    Text(problem)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+            }
+
+            HStack {
+                Spacer()
+                Button("Cancel", role: .cancel, action: onCancel)
+                Button("Rename") {
+                    onRename(newName.trimmingCharacters(in: .whitespacesAndNewlines))
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(validationProblem != nil)
+            }
+        }
+        .padding(20)
+        .frame(minWidth: 420)
+    }
+
+    /// Lightweight pre-validation. Doesn't try to mirror every git refname
+    /// rule (that's git's job and it errors clearly in the sheet) — just
+    /// catches the most common mistakes before they reach the shell.
+    private var validationProblem: String? {
+        let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return "Name can't be empty." }
+        if trimmed == originalName { return "New name is the same as the current name." }
+        if trimmed.contains(" ") { return "Branch names can't contain spaces." }
+        if existingLocalNames.contains(trimmed) {
+            return "A local branch named “\(trimmed)” already exists."
+        }
+        return nil
     }
 }
 

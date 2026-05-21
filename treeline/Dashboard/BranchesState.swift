@@ -133,6 +133,21 @@ final class BranchesState {
         runAction(title: "Push", commandPreview: preview, invocation: invocation)
     }
 
+    /// Rename a local branch. Surfaced through the per-row context menu;
+    /// only valid for local listings (remotes aren't renameable through git
+    /// without separate remote-side coordination, which is out of scope).
+    func runRename(from oldName: String, to newName: String) {
+        guard let gitClient else { return }
+        let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed != oldName else { return }
+        let invocation = gitClient.renameAction(from: oldName, to: trimmed)
+        runAction(
+            title: "Rename \(oldName) → \(trimmed)",
+            commandPreview: "git branch -m \(oldName) \(trimmed)",
+            invocation: invocation
+        )
+    }
+
     /// Switch to an existing branch, either local or by creating a tracking
     /// branch from a remote ref. Blocks on dirty working tree.
     func runSwitch(to listing: BranchListing) {
