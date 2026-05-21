@@ -1,39 +1,51 @@
 import SwiftUI
 
-/// Placeholder Project detail view. Later slices will replace the body with
-/// branch state, worktrees, sync status, and actions; for now it confirms
-/// the selection so launch can restore the last active Project, and exposes
-/// the action to switch which known checkout drives dashboard probes.
+/// Project detail view. Shows the Project identity header, the primary
+/// checkout picker (when there are multiple checkouts to choose from), and the
+/// branches panel where the user runs Fetch / Pull / Push / Switch / Create
+/// against the primary checkout.
 struct ProjectDetailView: View {
     let project: Project
     /// Optional dashboard state so the detail view can mutate primary
-    /// checkout selection. `nil` in #Preview blocks where the project is
-    /// rendered standalone.
+    /// checkout selection and reach the shared `GitClient`. `nil` in #Preview
+    /// blocks where the project is rendered standalone.
     var state: ProjectsDashboardState?
 
     @State private var changePrimaryError: String?
+    /// Owns the branch list and the active action for this Project. Rebuilt
+    /// whenever the Project ID or primary checkout changes so a relocate /
+    /// primary-checkout swap re-probes against the right path.
+    @State private var branchesState: BranchesState?
 
     var body: some View {
-        VStack(spacing: 16) {
-            Image(systemName: "folder.fill")
-                .font(.system(size: 48, weight: .light))
-                .foregroundStyle(.tint)
-            Text(project.displayName)
-                .font(.title)
-                .fontWeight(.semibold)
-            Text(project.primaryCheckoutPath)
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .textSelection(.enabled)
-                .multilineTextAlignment(.center)
-
-            if project.checkoutPaths.count > 1 {
-                primaryCheckoutPicker
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                identityHeader
+                if project.checkoutPaths.count > 1 {
+                    primaryCheckoutPicker
+                }
+                if let branchesState {
+                    Divider()
+                    BranchesSection(
+                        state: branchesState,
+                        health: state?.health(for: project) ?? .loading
+                    )
+                }
             }
+            .padding(24)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(32)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .navigationTitle(project.displayName)
+        .task(id: branchesIdentity) {
+            // Rebuild on Project identity or primary checkout change so the
+            // branches section never displays data probed against a stale path.
+            branchesState = BranchesState(
+                project: project,
+                gitClient: state?.gitClient,
+                dashboard: state
+            )
+        }
         .alert(
             "Couldn't change primary checkout",
             isPresented: Binding(
@@ -45,6 +57,32 @@ struct ProjectDetailView: View {
             Button("OK", role: .cancel) { changePrimaryError = nil }
         } message: { message in
             Text(message)
+        }
+    }
+
+    /// Combined identity used to invalidate `branchesState` when either the
+    /// Project or its primary checkout changes. Stringly-typed because `.task`
+    /// expects an `Equatable & Hashable` id and `Project` doesn't expose
+    /// primaryCheckoutPath in its `id`.
+    private var branchesIdentity: String {
+        "\(project.id)|\(project.primaryCheckoutPath)"
+    }
+
+    private var identityHeader: some View {
+        HStack(alignment: .top, spacing: 16) {
+            Image(systemName: "folder.fill")
+                .font(.system(size: 36, weight: .light))
+                .foregroundStyle(.tint)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(project.displayName)
+                    .font(.title)
+                    .fontWeight(.semibold)
+                Text(project.primaryCheckoutPath)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            }
+            Spacer()
         }
     }
 

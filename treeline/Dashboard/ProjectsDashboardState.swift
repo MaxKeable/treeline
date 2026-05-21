@@ -47,7 +47,10 @@ final class ProjectsDashboardState {
     var attachedNotice: String?
 
     private let store: ProjectStore?
-    private let gitClient: GitClient?
+    /// Exposed (read-only) so per-Project surfaces like the branches section
+    /// can issue git actions without each one re-injecting its own client.
+    /// The dashboard remains the only place that constructs one in production.
+    let gitClient: GitClient?
     private let healthProbe: (any HealthProbing)?
     private let clock: @Sendable () -> Date
     let stalenessThreshold: TimeInterval
