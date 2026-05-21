@@ -63,9 +63,24 @@ final class BranchesState {
     /// Last error from `refreshBranches`, surfaced inline above the list.
     var lastBranchError: String?
 
-    /// The action sheet's binding. When non-nil the modal is presented; the
-    /// user dismisses it via the Close button once the action finishes.
+    /// The action sheet's binding. When non-nil the modal is presented.
+    /// Decoupled from "is an action running" so we can keep the sheet hidden
+    /// for fast, successful actions — it only appears once the action has
+    /// been running for `sheetPresentationDelay`, or immediately when it
+    /// fails. Successful fast actions therefore never flash the sheet.
     var activeAction: Action?
+
+    /// In-flight action ID, kept separately from `activeAction` so the
+    /// "only one action at a time" guard still holds while the sheet stays
+    /// hidden waiting on the presentation delay.
+    private var runningActionID: UUID?
+
+    /// How long an action has to be running before the sheet appears.
+    /// Anything that finishes faster (most local-only operations: switch,
+    /// rename, create, list refresh) stays invisible on success. Long
+    /// network ops (push/pull/fetch) blow past this threshold and the user
+    /// gets live progress as before.
+    static let sheetPresentationDelay: Duration = .milliseconds(400)
 
     init(
         project: Project,
@@ -177,7 +192,7 @@ final class BranchesState {
     /// composite (`git add -A` then `git commit`) that needs to share one
     /// sheet across two streamed invocations.
     func runCommit(subject: String, body: String?) {
-        guard activeAction == nil else { return }
+        guard runningActionID == nil else { return }
         guard let gitClient else { return }
         let trimmedSubject = subject.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedSubject.isEmpty else { return }
@@ -185,7 +200,8 @@ final class BranchesState {
             ? "git add -A && git commit -m … -m …"
             : "git add -A && git commit -m …"
         let action = Action(title: "Commit", commandPreview: preview)
-        activeAction = action
+        runningActionID = action.id
+        schedulePresentation(of: action)
 
         Task { @MainActor [weak self, weak action] in
             guard let self, let action else { return }
@@ -204,10 +220,14 @@ final class BranchesState {
                    let updated = dashboard.projects.first(where: { $0.id == self.project.id }) {
                     await dashboard.refreshHealth(for: updated)
                 }
+                self.completeSuccessfully(action)
             } catch let GitClientError.actionFailed(_, output) {
-                action.phase = .failed(message: output.isEmpty ? "git exited with a non-zero status." : output)
+                self.complete(
+                    action,
+                    failure: output.isEmpty ? "git exited with a non-zero status." : output
+                )
             } catch {
-                action.phase = .failed(message: String(describing: error))
+                self.complete(action, failure: String(describing: error))
             }
         }
     }
@@ -236,14 +256,19 @@ final class BranchesState {
         commandPreview: String,
         invocation: GitClient.ActionInvocation
     ) {
-        guard activeAction == nil else {
-            // Only one action runs at a time — the sheet is modal and a
-            // second concurrent action would race on the same working tree.
+        guard runningActionID == nil else {
+            // Only one action runs at a time — even with the sheet hidden we
+            // never want two concurrent git invocations against the same
+            // working tree.
             return
         }
         guard let gitClient else { return }
         let action = Action(title: title, commandPreview: commandPreview)
-        activeAction = action
+        runningActionID = action.id
+
+        // Schedule deferred presentation. If the action is still running
+        // after the delay we surface the sheet so slow ops get live progress.
+        schedulePresentation(of: action)
 
         Task { @MainActor [weak self, weak action] in
             guard let self, let action else { return }
@@ -264,13 +289,61 @@ final class BranchesState {
                    let updated = dashboard.projects.first(where: { $0.id == self.project.id }) {
                     await dashboard.refreshHealth(for: updated)
                 }
+                // Success: dismiss the sheet if the delay already presented
+                // it; otherwise it never appears at all. Either way the user
+                // sees no popup for fast successful actions.
+                self.completeSuccessfully(action)
             } catch let GitClientError.dirtyWorkingTree(path) {
-                action.phase = .failed(message: "Working tree at \(path) has uncommitted changes. Commit or stash them, then try again.")
+                self.complete(
+                    action,
+                    failure: "Working tree at \(path) has uncommitted changes. Commit or stash them, then try again."
+                )
             } catch let GitClientError.actionFailed(_, output) {
-                action.phase = .failed(message: output.isEmpty ? "git exited with a non-zero status." : output)
+                self.complete(
+                    action,
+                    failure: output.isEmpty ? "git exited with a non-zero status." : output
+                )
             } catch {
-                action.phase = .failed(message: String(describing: error))
+                self.complete(action, failure: String(describing: error))
             }
+        }
+    }
+
+    /// Show the sheet only if the action is still running after
+    /// `sheetPresentationDelay`. Done as a fire-and-forget task because we
+    /// want the work task to keep running independently — the presentation
+    /// timer is purely a UX concern.
+    private func schedulePresentation(of action: Action) {
+        Task { @MainActor [weak self, weak action] in
+            try? await Task.sleep(for: Self.sheetPresentationDelay)
+            guard let self, let action else { return }
+            // Only present if (a) this is still the in-flight action and
+            // (b) it hasn't already finished. Fast successes will have
+            // cleared runningActionID before we get here.
+            guard self.runningActionID == action.id else { return }
+            guard !action.isFinished else { return }
+            self.activeAction = action
+        }
+    }
+
+    /// Success-path completion. Clears in-flight tracking and dismisses the
+    /// sheet if the delayed presentation ended up surfacing it. Fast
+    /// successes never set `activeAction` at all so this is a no-op for them.
+    private func completeSuccessfully(_ action: Action) {
+        if runningActionID == action.id { runningActionID = nil }
+        if activeAction?.id == action.id { activeAction = nil }
+    }
+
+    /// Failure-path completion. Forces the sheet open regardless of how long
+    /// the action took — the user needs to see the error and log even if the
+    /// command failed in 50 ms.
+    private func complete(_ action: Action, failure: String) {
+        action.phase = .failed(message: failure)
+        if runningActionID == action.id { runningActionID = nil }
+        // Present the sheet if the delay hadn't fired yet so the failure
+        // never gets silently swallowed.
+        if activeAction?.id != action.id {
+            activeAction = action
         }
     }
 }
