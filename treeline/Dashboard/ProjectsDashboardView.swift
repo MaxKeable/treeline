@@ -1,9 +1,9 @@
 import SwiftUI
-import AppKit
 
 struct ProjectsDashboardView: View {
     @Bindable var state: ProjectsDashboardState
     var onAddProject: (() -> Void)?
+    private let folderPicker: any DashboardFolderPicking
     /// Project queued for a destructive Remove confirmation. Bound to the
     /// confirmation dialog so the action only fires after the user agrees.
     @State private var projectPendingRemoval: Project?
@@ -11,6 +11,16 @@ struct ProjectsDashboardView: View {
     /// checkout" attempt. Surfaced in its own alert so the wording stays
     /// specific to this action instead of being lumped in with relocate.
     @State private var changePrimaryError: String?
+
+    init(
+        state: ProjectsDashboardState,
+        onAddProject: (() -> Void)? = nil,
+        folderPicker: any DashboardFolderPicking = AppKitDashboardFolderPicker()
+    ) {
+        self.state = state
+        self.onAddProject = onAddProject
+        self.folderPicker = folderPicker
+    }
 
     var body: some View {
         NavigationStack(path: activeProjectPath) {
@@ -194,7 +204,9 @@ struct ProjectsDashboardView: View {
                         )
                         Spacer(minLength: 0)
                         VStack(alignment: .trailing, spacing: 6) {
-                            Button("Relocate…") { presentRelocatePicker(for: project) }
+                            Button("Relocate…") {
+                                Task { await coordinator.relocateProjectFromPicker(project) }
+                            }
                             Button("Remove…", role: .destructive) {
                                 projectPendingRemoval = project
                             }
@@ -217,7 +229,9 @@ struct ProjectsDashboardView: View {
                     Task { await state.refreshHealth(for: project) }
                 }
                 primaryCheckoutMenu(for: project)
-                Button("Relocate…") { presentRelocatePicker(for: project) }
+                Button("Relocate…") {
+                    Task { await coordinator.relocateProjectFromPicker(project) }
+                }
                 Button("Remove…", role: .destructive) {
                     projectPendingRemoval = project
                 }
@@ -250,39 +264,7 @@ struct ProjectsDashboardView: View {
     }
 
     private func changePrimaryCheckout(_ project: Project, to path: String) async {
-        do {
-            _ = try await state.changePrimaryCheckout(
-                project,
-                to: URL(fileURLWithPath: path)
-            )
-            // Re-probe immediately so the row reflects the new primary's
-            // branch / sync / GitHub state without waiting for the next
-            // dashboard-wide refresh.
-            if let updated = state.projects.first(where: { $0.id == project.id }) {
-                await state.refreshHealth(for: updated)
-            }
-        } catch let error as ProjectsDashboardState.ChangePrimaryCheckoutError {
-            changePrimaryError = changePrimaryMessage(for: error)
-        } catch {
-            changePrimaryError = String(describing: error)
-        }
-    }
-
-    private func changePrimaryMessage(
-        for error: ProjectsDashboardState.ChangePrimaryCheckoutError
-    ) -> String {
-        switch error {
-        case .notConfigured:
-            return "Treeline isn't configured to access git, so the primary checkout can't be changed."
-        case .projectNotFound:
-            return "That Project is no longer tracked."
-        case .unknownCheckout(let path):
-            return "“\(path)” isn't one of this Project's known checkouts."
-        case .missingFolder(let path):
-            return "“\(path)” no longer exists on disk."
-        case .repositoryMismatch(let message):
-            return message
-        }
+        changePrimaryError = await coordinator.changePrimaryCheckout(project, to: path)
     }
 
     private func triggerAdd() {
@@ -290,59 +272,11 @@ struct ProjectsDashboardView: View {
             onAddProject()
             return
         }
-        presentFolderPicker()
+        Task { await coordinator.addProjectFromPicker() }
     }
 
-    private func presentRelocatePicker(for project: Project) {
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = false
-        panel.canChooseDirectories = true
-        panel.allowsMultipleSelection = false
-        panel.title = "Choose the new folder for “\(project.displayName)”"
-        panel.prompt = "Relocate"
-        panel.begin { response in
-            guard response == .OK, let url = panel.url else { return }
-            Task { @MainActor in
-                do {
-                    _ = try await state.relocateProject(project, to: url)
-                } catch let error as ProjectsDashboardState.RelocateProjectError {
-                    state.lastRelocateError = relocateMessage(for: error)
-                } catch {
-                    state.lastRelocateError = String(describing: error)
-                }
-            }
-        }
-    }
-
-    private func relocateMessage(for error: ProjectsDashboardState.RelocateProjectError) -> String {
-        switch error {
-        case .notConfigured:
-            return "Treeline isn't configured to access git, so the Project can't be relocated."
-        case .invalidPath(let reason):
-            return "That folder isn't inside a git repository.\n\n\(reason)"
-        case .repositoryMismatch(let message):
-            return message
-        }
-    }
-
-    private func presentFolderPicker() {
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = false
-        panel.canChooseDirectories = true
-        panel.allowsMultipleSelection = false
-        panel.title = "Choose a folder inside a git checkout"
-        panel.prompt = "Add Project"
-
-        panel.begin { response in
-            guard response == .OK, let url = panel.url else { return }
-            Task { @MainActor in
-                do {
-                    _ = try await state.addProject(at: url)
-                } catch {
-                    state.lastAddError = String(describing: error)
-                }
-            }
-        }
+    private var coordinator: DashboardCoordinator {
+        DashboardCoordinator(state: state, folderPicker: folderPicker)
     }
 }
 
