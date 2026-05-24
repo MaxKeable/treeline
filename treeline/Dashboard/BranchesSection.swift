@@ -37,10 +37,13 @@ struct BranchesSection: View {
         .task { await state.refreshBranches() }
         .sheet(item: $state.activeAction) { action in
             // `activeAction` is only set on failure, so this sheet is now
-            // purely an error surface — close just clears the binding.
-            GitActionSheet(action: action) {
-                state.activeAction = nil
-            }
+            // purely an error surface. Recovery button (when present) hands
+            // back to the state to kick off the suggested follow-up.
+            GitActionSheet(
+                action: action,
+                onClose: { state.activeAction = nil },
+                onRecover: action.recovery == nil ? nil : { state.performRecovery(for: action) }
+            )
         }
         .sheet(isPresented: $isPresentingNewBranchSheet) {
             NewBranchSheet(

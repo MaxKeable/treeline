@@ -43,12 +43,39 @@ final class BranchesState {
             case failed(message: String)
         }
 
+        /// One-click follow-up offered in the error sheet when we recognise
+        /// the failure as something Treeline can fix automatically. Surfaced
+        /// as a button so the user opts in instead of us silently re-running
+        /// git with different flags.
+        enum Recovery: Equatable, Sendable {
+            /// Re-push with `-u origin <branch>` to rewrite the stale upstream
+            /// configuration. The classic post-rename push failure.
+            case relinkUpstreamAndPush(branch: String)
+
+            var buttonLabel: String {
+                switch self {
+                case .relinkUpstreamAndPush(let branch):
+                    return "Push and re-link upstream to origin/\(branch)"
+                }
+            }
+
+            var explanation: String {
+                switch self {
+                case .relinkUpstreamAndPush:
+                    return "This branch was likely renamed locally — its upstream still points at the old name. Treeline can re-push and re-link the upstream to the matching remote branch."
+                }
+            }
+        }
+
         let id = UUID()
         let kind: Kind
         let title: String
         let commandPreview: String
         var output: [String] = []
         var phase: Phase = .running
+        /// Suggested follow-up the user can invoke from the error sheet.
+        /// `nil` for failures we don't know how to recover from.
+        var recovery: Recovery?
 
         init(kind: Kind, title: String, commandPreview: String) {
             self.kind = kind
@@ -158,6 +185,11 @@ final class BranchesState {
     /// Kick off a push. The caller supplies the current branch name and
     /// whether it has an upstream so the action can pick between `git push`
     /// and `git push -u origin <branch>` automatically.
+    ///
+    /// If the push fails because the configured upstream's branch name no
+    /// longer matches the local branch (classic post-rename situation), the
+    /// error sheet offers a "Push and re-link upstream" recovery button that
+    /// retries with `-u origin <branch>`.
     func runPush(currentBranch: String?, hasUpstream: Bool) {
         guard let gitClient else { return }
         let invocation = gitClient.pushAction(
@@ -165,7 +197,61 @@ final class BranchesState {
             hasUpstream: hasUpstream
         )
         let preview = "git " + invocation.arguments.joined(separator: " ")
-        runAction(kind: .push, title: "Push", commandPreview: preview, invocation: invocation)
+        runAction(
+            kind: .push,
+            title: "Push",
+            commandPreview: preview,
+            invocation: invocation,
+            recoveryDetector: { failureOutput in
+                Self.detectPushRecovery(in: failureOutput, currentBranch: currentBranch)
+            }
+        )
+    }
+
+    /// Look at a failed push's combined output and decide if we recognise it
+    /// as something Treeline can fix. Matched against git's exact phrasing
+    /// for the rename/upstream-mismatch error.
+    ///
+    /// `nonisolated` so the @Sendable detector closure can call it freely —
+    /// the function is a pure string parse with no state to protect.
+    private nonisolated static func detectPushRecovery(
+        in output: String,
+        currentBranch: String?
+    ) -> Action.Recovery? {
+        guard let branch = currentBranch, !branch.isEmpty else { return nil }
+        // git's wording is stable across versions: "The upstream branch of
+        // your current branch does not match the name of your current
+        // branch". Match the distinctive fragment so we're not fooled by
+        // unrelated "upstream" mentions in stderr.
+        if output.localizedCaseInsensitiveContains("upstream branch of your current branch does not match") {
+            return .relinkUpstreamAndPush(branch: branch)
+        }
+        return nil
+    }
+
+    /// Invoke the suggested recovery on a failed action. Closes the sheet
+    /// and kicks off the recovery as a fresh action so it gets its own
+    /// spinner + log just like any other run.
+    func performRecovery(for action: Action) {
+        guard let recovery = action.recovery else { return }
+        guard let gitClient else { return }
+        // Clear the error sheet first so the button press doesn't visually
+        // race the new action's spinner.
+        activeAction = nil
+        switch recovery {
+        case .relinkUpstreamAndPush(let branch):
+            // Force the `-u origin <branch>` path; that's exactly what
+            // `pushAction` produces when `hasUpstream` is false.
+            let invocation = gitClient.pushAction(currentBranch: branch, hasUpstream: false)
+            runAction(
+                kind: .push,
+                title: "Push (re-link upstream)",
+                commandPreview: "git " + invocation.arguments.joined(separator: " "),
+                invocation: invocation
+                // No recoveryDetector on the recovery itself — if THIS fails
+                // it's a real error, not another rename-shaped recoverable.
+            )
+        }
     }
 
     /// Rename a local branch. Surfaced through the per-row context menu;
@@ -295,7 +381,8 @@ final class BranchesState {
         kind: Action.Kind,
         title: String,
         commandPreview: String,
-        invocation: GitClient.ActionInvocation
+        invocation: GitClient.ActionInvocation,
+        recoveryDetector: (@Sendable (String) -> Action.Recovery?)? = nil
     ) {
         guard runningAction == nil else {
             // Only one action runs at a time — we never want two concurrent
@@ -329,15 +416,17 @@ final class BranchesState {
             } catch let GitClientError.dirtyWorkingTree(path) {
                 self.complete(
                     action,
-                    failure: "Working tree at \(path) has uncommitted changes. Commit or stash them, then try again."
+                    failure: "Working tree at \(path) has uncommitted changes. Commit or stash them, then try again.",
+                    recoveryDetector: recoveryDetector
                 )
             } catch let GitClientError.actionFailed(_, output) {
                 self.complete(
                     action,
-                    failure: output.isEmpty ? "git exited with a non-zero status." : output
+                    failure: output.isEmpty ? "git exited with a non-zero status." : output,
+                    recoveryDetector: recoveryDetector
                 )
             } catch {
-                self.complete(action, failure: String(describing: error))
+                self.complete(action, failure: String(describing: error), recoveryDetector: recoveryDetector)
             }
         }
     }
@@ -348,10 +437,22 @@ final class BranchesState {
         if runningAction?.id == action.id { runningAction = nil }
     }
 
-    /// Failure path — clears the in-flight tracking and presents the modal
-    /// with the captured log so the user can read and copy the error.
-    private func complete(_ action: Action, failure: String) {
+    /// Failure path — clears the in-flight tracking, attaches any recovery
+    /// the detector recognised in the captured output, and presents the
+    /// modal so the user can read the error and choose the next move.
+    private func complete(
+        _ action: Action,
+        failure: String,
+        recoveryDetector: (@Sendable (String) -> Action.Recovery?)? = nil
+    ) {
         action.phase = .failed(message: failure)
+        if let recoveryDetector {
+            // Probe against the combined stream + the explicit failure
+            // message so detectors don't have to guess where git put the
+            // signal text.
+            let haystack = action.combinedLog + "\n" + failure
+            action.recovery = recoveryDetector(haystack)
+        }
         if runningAction?.id == action.id { runningAction = nil }
         activeAction = action
     }

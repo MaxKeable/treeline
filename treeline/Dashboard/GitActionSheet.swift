@@ -12,6 +12,9 @@ import AppKit
 struct GitActionSheet: View {
     @Bindable var action: BranchesState.Action
     var onClose: () -> Void
+    /// Invoked when the user clicks the suggested-recovery button. `nil`
+    /// when the action has no recognised recovery — the button hides.
+    var onRecover: (() -> Void)?
 
     /// Brief "Copied" confirmation shown next to the Copy button after a
     /// click. Auto-clears on a short timer so the affordance stays compact.
@@ -22,6 +25,9 @@ struct GitActionSheet: View {
             header
             Divider()
             errorMessage
+            if action.recovery != nil {
+                recoverySection
+            }
             Divider()
             outputView
             Divider()
@@ -29,6 +35,35 @@ struct GitActionSheet: View {
         }
         .padding(20)
         .frame(minWidth: 560, idealWidth: 640, minHeight: 360, idealHeight: 440)
+    }
+
+    /// Inline recovery suggestion shown above the log when Treeline recognises
+    /// the failure as something it can fix. Explains what we'll do and lets
+    /// the user opt in with a single click.
+    @ViewBuilder
+    private var recoverySection: some View {
+        if let recovery = action.recovery, let onRecover {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Suggested fix")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                Text(recovery.explanation)
+                    .font(.callout)
+                Button(action: onRecover) {
+                    Label(recovery.buttonLabel, systemImage: "wand.and.stars")
+                }
+                .buttonStyle(.borderedProminent)
+            }
+            .padding(10)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(Color.accentColor.opacity(0.08))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .strokeBorder(Color.accentColor.opacity(0.4))
+            )
+        }
     }
 
     private var header: some View {
