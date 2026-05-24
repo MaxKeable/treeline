@@ -1,19 +1,27 @@
 import SwiftUI
+import AppKit
 
-/// Modal sheet that hosts a single in-flight (or just-finished) git action.
+/// Modal sheet shown **only** when a git action fails.
 ///
-/// Shows the command preview, a live-updating output transcript, and a status
-/// line. The sheet is dismissable via Close once the action finishes — there's
-/// no auto-dismiss so the user can read the final output, especially on
-/// failure. Cancelling an in-flight action isn't supported in v1: a half-done
-/// `git pull` is harder to reason about than waiting for it to finish.
+/// Surfaces the action title, the command we tried to run, the error message,
+/// the full captured log, and a Copy Log button. Every text element is
+/// selectable so the user can grab fragments by hand too.
+///
+/// Successes never present this sheet — the spinner on the originating button
+/// and the refreshed branch list are the success feedback.
 struct GitActionSheet: View {
     @Bindable var action: BranchesState.Action
     var onClose: () -> Void
 
+    /// Brief "Copied" confirmation shown next to the Copy button after a
+    /// click. Auto-clears on a short timer so the affordance stays compact.
+    @State private var didCopyRecently = false
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             header
+            Divider()
+            errorMessage
             Divider()
             outputView
             Divider()
@@ -26,9 +34,11 @@ struct GitActionSheet: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
-                statusIcon
+                Image(systemName: "exclamationmark.octagon.fill")
+                    .foregroundStyle(.red)
                 Text(action.title)
                     .font(.headline)
+                    .textSelection(.enabled)
                 Spacer()
             }
             Text(action.commandPreview)
@@ -39,34 +49,51 @@ struct GitActionSheet: View {
     }
 
     @ViewBuilder
-    private var statusIcon: some View {
-        switch action.phase {
-        case .running:
-            ProgressView()
-                .controlSize(.small)
-        case .succeeded:
-            Image(systemName: "checkmark.circle.fill")
-                .foregroundStyle(.green)
-        case .failed:
-            Image(systemName: "exclamationmark.octagon.fill")
-                .foregroundStyle(.red)
+    private var errorMessage: some View {
+        if case .failed(let message) = action.phase {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Error")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                Text(message)
+                    .foregroundStyle(.red)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
     }
 
     private var outputView: some View {
-        ScrollViewReader { proxy in
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text("Log")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button {
+                    copyLog()
+                } label: {
+                    Label(didCopyRecently ? "Copied" : "Copy log",
+                          systemImage: didCopyRecently ? "checkmark" : "doc.on.doc")
+                }
+                .controlSize(.small)
+                .disabled(action.output.isEmpty)
+            }
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 2) {
-                    ForEach(Array(action.output.enumerated()), id: \.offset) { index, line in
-                        Text(line.isEmpty ? " " : line)
+                    if action.output.isEmpty {
+                        Text("(no output)")
                             .font(.system(.body, design: .monospaced))
+                            .foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .textSelection(.enabled)
-                            .id(index)
+                    } else {
+                        ForEach(Array(action.output.enumerated()), id: \.offset) { _, line in
+                            Text(line.isEmpty ? " " : line)
+                                .font(.system(.body, design: .monospaced))
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .textSelection(.enabled)
+                        }
                     }
-                    // Sentinel row pinned to the bottom; scrolling to it keeps
-                    // the latest line visible without depending on count math.
-                    Color.clear.frame(height: 1).id("__tail")
                 }
                 .padding(8)
             }
@@ -76,44 +103,30 @@ struct GitActionSheet: View {
                     .strokeBorder(.quaternary)
             )
             .clipShape(RoundedRectangle(cornerRadius: 6))
-            .onChange(of: action.output.count) { _, _ in
-                withAnimation(.linear(duration: 0.05)) {
-                    proxy.scrollTo("__tail", anchor: .bottom)
-                }
-            }
         }
     }
 
-    @ViewBuilder
     private var footer: some View {
-        HStack(alignment: .firstTextBaseline) {
-            statusMessage
+        HStack {
             Spacer()
-            Button(role: action.isFinished ? .cancel : nil) {
-                onClose()
-            } label: {
-                Text(action.isFinished ? "Close" : "Hide")
-            }
-            .keyboardShortcut(.defaultAction)
-            .disabled(false)
+            Button("Close", role: .cancel, action: onClose)
+                .keyboardShortcut(.defaultAction)
         }
     }
 
-    @ViewBuilder
-    private var statusMessage: some View {
-        switch action.phase {
-        case .running:
-            Text("Running…")
-                .foregroundStyle(.secondary)
-        case .succeeded:
-            Text("Done")
-                .foregroundStyle(.green)
-        case .failed(let message):
-            Text(message)
-                .foregroundStyle(.red)
-                .font(.callout)
-                .lineLimit(3)
-                .textSelection(.enabled)
+    /// Push the full log onto the system pasteboard. Uses the action's
+    /// pre-joined `combinedLog` so the format is consistent with anything
+    /// else that might want to surface the same transcript.
+    private func copyLog() {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(action.combinedLog, forType: .string)
+        didCopyRecently = true
+        Task { @MainActor in
+            // Short visible "Copied" window — long enough to register, short
+            // enough that the button label stops feeling stuck.
+            try? await Task.sleep(for: .seconds(1.5))
+            didCopyRecently = false
         }
     }
 }

@@ -36,16 +36,10 @@ struct BranchesSection: View {
         .padding(.vertical, 8)
         .task { await state.refreshBranches() }
         .sheet(item: $state.activeAction) { action in
+            // `activeAction` is only set on failure, so this sheet is now
+            // purely an error surface — close just clears the binding.
             GitActionSheet(action: action) {
-                // Allow dismissing even while running ("Hide") so the user
-                // can keep working; the underlying Task continues and the
-                // sheet will re-appear if they trigger another action only
-                // after this one finishes (runAction guards on activeAction).
-                if action.isFinished {
-                    state.activeAction = nil
-                } else {
-                    state.activeAction = nil
-                }
+                state.activeAction = nil
             }
         }
         .sheet(isPresented: $isPresentingNewBranchSheet) {
@@ -85,56 +79,106 @@ struct BranchesSection: View {
 
     private var actionBar: some View {
         HStack(spacing: 8) {
-            Button {
+            actionButton(
+                kind: .fetch,
+                label: "Fetch",
+                systemImage: "arrow.down.to.line",
+                disabledReason: nil,
+                fallbackHelp: "git fetch --all --prune"
+            ) {
                 state.runFetch()
-            } label: { Label("Fetch", systemImage: "arrow.down.to.line") }
+            }
 
-            Button {
+            actionButton(
+                kind: .pull,
+                label: "Pull",
+                systemImage: "arrow.down.circle",
+                disabledReason: health.workingTree == .dirty
+                    ? "Working tree has uncommitted changes — commit or stash first."
+                    : nil,
+                fallbackHelp: "git pull on the current branch"
+            ) {
                 state.runPull()
-            } label: { Label("Pull", systemImage: "arrow.down.circle") }
-                .disabled(health.workingTree == .dirty)
-                .help(health.workingTree == .dirty
-                      ? "Working tree has uncommitted changes — commit or stash first."
-                      : "git pull on the current branch")
+            }
 
-            Button {
+            actionButton(
+                kind: .commit,
+                label: "Commit",
+                systemImage: "tray.and.arrow.down",
+                disabledReason: commitDisabledReason,
+                fallbackHelp: "Stage all tracked + new files and commit"
+            ) {
                 isPresentingCommitSheet = true
-            } label: { Label("Commit", systemImage: "tray.and.arrow.down") }
-                .disabled(commitDisabled)
-                .help(commitDisabledReason ?? "Stage all tracked + new files and commit")
+            }
 
-            Button {
+            actionButton(
+                kind: .push,
+                label: "Push",
+                systemImage: "arrow.up.circle",
+                disabledReason: health.currentBranch == nil
+                    ? "Detached HEAD — switch to a branch first."
+                    : nil,
+                fallbackHelp: "git push (sets upstream automatically on first push)"
+            ) {
                 state.runPush(
                     currentBranch: health.currentBranch,
                     hasUpstream: hasUpstreamForCurrent
                 )
-            } label: { Label("Push", systemImage: "arrow.up.circle") }
-                .disabled(health.currentBranch == nil)
-                .help(health.currentBranch == nil
-                      ? "Detached HEAD — switch to a branch first."
-                      : "git push (sets upstream automatically on first push)")
+            }
 
-            Button {
-                isPresentingNewBranchSheet = true
-            } label: { Label("New Branch", systemImage: "plus.rectangle.on.folder") }
+            actionButton(
+                kind: .createBranch,
+                label: "New Branch",
+                systemImage: "plus.rectangle.on.folder",
                 // Default flow in the sheet is "create + check out", which
-                // moves HEAD and therefore needs a clean tree. Block at the
-                // button rather than letting the user fill out the sheet and
-                // hit a dirty-tree error after the fact.
-                .disabled(health.workingTree == .dirty)
-                .help(health.workingTree == .dirty
-                      ? "Working tree has uncommitted changes — commit or stash first."
-                      : "Create a new branch off the current HEAD")
+                // moves HEAD and therefore needs a clean tree.
+                disabledReason: health.workingTree == .dirty
+                    ? "Working tree has uncommitted changes — commit or stash first."
+                    : nil,
+                fallbackHelp: "Create a new branch off the current HEAD"
+            ) {
+                isPresentingNewBranchSheet = true
+            }
 
             Spacer()
 
             Button {
                 Task { await state.refreshBranches() }
             } label: { Label("Refresh List", systemImage: "arrow.clockwise") }
+                .disabled(state.isAnyActionRunning)
                 .help("Re-read the branch list with git for-each-ref")
         }
         .buttonStyle(.bordered)
         .controlSize(.regular)
+    }
+
+    /// Shared layout for the action-bar buttons. Swaps the icon for a
+    /// `ProgressView` while *this* action is in flight, disables itself
+    /// whenever any action is running (or has its own reason to be disabled),
+    /// and forwards a sensible tooltip in every state.
+    @ViewBuilder
+    private func actionButton(
+        kind: BranchesState.Action.Kind,
+        label: String,
+        systemImage: String,
+        disabledReason: String?,
+        fallbackHelp: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        let isThisRunning = state.isRunning(kind)
+        let isAnyRunning = state.isAnyActionRunning
+        Button(action: action) {
+            HStack(spacing: 6) {
+                if isThisRunning {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Image(systemName: systemImage)
+                }
+                Text(label)
+            }
+        }
+        .disabled(isAnyRunning || disabledReason != nil)
+        .help(isThisRunning ? "Running…" : (disabledReason ?? fallbackHelp))
     }
 
     private var branchList: some View {
@@ -167,6 +211,8 @@ struct BranchesSection: View {
                             changedFileCount: listing.isCurrent ? state.changedFileCount : nil,
                             isSwitchDisabled: switchDisabled(for: listing),
                             switchDisabledReason: switchDisabledReason(for: listing),
+                            isSwitching: state.isRunning(.switchBranch(listingID: listing.id)),
+                            isAnyActionRunning: state.isAnyActionRunning,
                             onSwitch: { state.runSwitch(to: listing) },
                             onRename: listing.kind == .local
                                 ? { branchPendingRename = listing }
@@ -257,6 +303,14 @@ private struct BranchRow: View {
     let changedFileCount: Int?
     let isSwitchDisabled: Bool
     let switchDisabledReason: String?
+    /// `true` when *this* row's switch is currently running. Drives the
+    /// per-row spinner so the user can see which branch is being switched to
+    /// even when multiple rows look similar.
+    let isSwitching: Bool
+    /// `true` when any action anywhere in the section is running. Used to
+    /// blanket-disable other rows' Switch buttons so the user can't queue a
+    /// second working-tree mutation against the same checkout.
+    let isAnyActionRunning: Bool
     let onSwitch: () -> Void
     /// `nil` when rename isn't supported for this row (i.e. remote-tracking
     /// refs). When present, surfaced both in the context menu and as an
@@ -302,22 +356,34 @@ private struct BranchRow: View {
             }
             Spacer()
             Button(action: onSwitch) {
-                Text(isCurrent ? "Current" : (listing.kind == .local ? "Switch" : "Check out"))
+                if isSwitching {
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.small)
+                        Text("Switching…")
+                    }
+                } else {
+                    Text(isCurrent ? "Current" : (listing.kind == .local ? "Switch" : "Check out"))
+                }
             }
             .controlSize(.small)
-            .disabled(isSwitchDisabled)
-            .help(switchDisabledReason ?? "")
+            // Disable while any action runs so a second switch can't be
+            // queued. The currently-switching row keeps showing the spinner
+            // because `isSwitching` short-circuits the visual treatment.
+            .disabled(isSwitchDisabled || (isAnyActionRunning && !isSwitching))
+            .help(isSwitching ? "Switching…" : (switchDisabledReason ?? ""))
             if let onRename {
                 // Overflow menu next to the Switch button so the action is
                 // discoverable without forcing users to know about right-click.
                 Menu {
                     Button("Rename…", action: onRename)
+                        .disabled(isAnyActionRunning)
                 } label: {
                     Image(systemName: "ellipsis")
                 }
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
                 .fixedSize()
+                .disabled(isAnyActionRunning)
                 .help("More actions for \(listing.displayName)")
             }
         }

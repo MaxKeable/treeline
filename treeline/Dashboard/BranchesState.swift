@@ -14,12 +14,29 @@ import Foundation
 @MainActor
 @Observable
 final class BranchesState {
-    /// One ongoing or completed git action surfaced through the modal sheet.
-    /// The sheet observes this directly so live output and the final result
-    /// stay in sync without an intermediate state machine.
+    /// One ongoing or completed git action.
+    ///
+    /// Lives until completion regardless of whether the UI ever surfaces it:
+    /// `BranchesState.runningAction` references it while in flight (drives
+    /// the per-button spinner + disable), and `activeAction` is only set on
+    /// failure so the modal sheet appears exclusively for errors.
     @MainActor
     @Observable
     final class Action: Identifiable {
+        /// Classifies what's running so buttons can decide which one of them
+        /// shows the spinner. Carrying identifiers (branch name, listing id)
+        /// on the cases that need them keeps the spinner targeted — switching
+        /// to `main` doesn't make every Switch button on every row spin.
+        enum Kind: Equatable, Hashable, Sendable {
+            case fetch
+            case pull
+            case push
+            case commit
+            case createBranch
+            case rename(branch: String)
+            case switchBranch(listingID: String)
+        }
+
         enum Phase: Equatable {
             case running
             case succeeded
@@ -27,12 +44,14 @@ final class BranchesState {
         }
 
         let id = UUID()
+        let kind: Kind
         let title: String
         let commandPreview: String
         var output: [String] = []
         var phase: Phase = .running
 
-        init(title: String, commandPreview: String) {
+        init(kind: Kind, title: String, commandPreview: String) {
+            self.kind = kind
             self.title = title
             self.commandPreview = commandPreview
         }
@@ -42,6 +61,12 @@ final class BranchesState {
             case .running: return false
             case .succeeded, .failed: return true
             }
+        }
+
+        /// Joined transcript ready for clipboard. Computed here so the sheet
+        /// and any future copy-anywhere caller agree on the format.
+        var combinedLog: String {
+            output.joined(separator: "\n")
         }
     }
 
@@ -63,24 +88,17 @@ final class BranchesState {
     /// Last error from `refreshBranches`, surfaced inline above the list.
     var lastBranchError: String?
 
-    /// The action sheet's binding. When non-nil the modal is presented.
-    /// Decoupled from "is an action running" so we can keep the sheet hidden
-    /// for fast, successful actions — it only appears once the action has
-    /// been running for `sheetPresentationDelay`, or immediately when it
-    /// fails. Successful fast actions therefore never flash the sheet.
+    /// The action sheet binding. Set **only** when an action fails — the
+    /// modal is reserved for surfacing errors with a copyable log. Successes
+    /// never present anything; the user gets their feedback through the
+    /// branch list refresh and the changed-file badge.
     var activeAction: Action?
 
-    /// In-flight action ID, kept separately from `activeAction` so the
-    /// "only one action at a time" guard still holds while the sheet stays
-    /// hidden waiting on the presentation delay.
-    private var runningActionID: UUID?
-
-    /// How long an action has to be running before the sheet appears.
-    /// Anything that finishes faster (most local-only operations: switch,
-    /// rename, create, list refresh) stays invisible on success. Long
-    /// network ops (push/pull/fetch) blow past this threshold and the user
-    /// gets live progress as before.
-    static let sheetPresentationDelay: Duration = .milliseconds(400)
+    /// The action currently in flight. Drives the per-button spinner and
+    /// the global "another action is running" disable. Set immediately when
+    /// the user clicks a button and cleared when the action completes — the
+    /// UI shows progress on the originating button, not in a modal.
+    private(set) var runningAction: Action?
 
     init(
         project: Project,
@@ -119,6 +137,7 @@ final class BranchesState {
     func runFetch() {
         guard let gitClient else { return }
         runAction(
+            kind: .fetch,
             title: "Fetch",
             commandPreview: "git fetch --all --prune",
             invocation: gitClient.fetchAction()
@@ -129,6 +148,7 @@ final class BranchesState {
     func runPull() {
         guard let gitClient else { return }
         runAction(
+            kind: .pull,
             title: "Pull",
             commandPreview: "git pull",
             invocation: gitClient.pullAction()
@@ -145,7 +165,7 @@ final class BranchesState {
             hasUpstream: hasUpstream
         )
         let preview = "git " + invocation.arguments.joined(separator: " ")
-        runAction(title: "Push", commandPreview: preview, invocation: invocation)
+        runAction(kind: .push, title: "Push", commandPreview: preview, invocation: invocation)
     }
 
     /// Rename a local branch. Surfaced through the per-row context menu;
@@ -157,6 +177,7 @@ final class BranchesState {
         guard !trimmed.isEmpty, trimmed != oldName else { return }
         let invocation = gitClient.renameAction(from: oldName, to: trimmed)
         runAction(
+            kind: .rename(branch: oldName),
             title: "Rename \(oldName) → \(trimmed)",
             commandPreview: "git branch -m \(oldName) \(trimmed)",
             invocation: invocation
@@ -180,7 +201,12 @@ final class BranchesState {
             )
             preview = "git switch -c \(listing.shortName) --track \(listing.displayName)"
         }
-        runAction(title: "Switch to \(listing.displayName)", commandPreview: preview, invocation: invocation)
+        runAction(
+            kind: .switchBranch(listingID: listing.id),
+            title: "Switch to \(listing.displayName)",
+            commandPreview: preview,
+            invocation: invocation
+        )
     }
 
     /// Stage everything (tracked changes + new files, gitignored excluded)
@@ -192,16 +218,15 @@ final class BranchesState {
     /// composite (`git add -A` then `git commit`) that needs to share one
     /// sheet across two streamed invocations.
     func runCommit(subject: String, body: String?) {
-        guard runningActionID == nil else { return }
+        guard runningAction == nil else { return }
         guard let gitClient else { return }
         let trimmedSubject = subject.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedSubject.isEmpty else { return }
         let preview = body?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
             ? "git add -A && git commit -m … -m …"
             : "git add -A && git commit -m …"
-        let action = Action(title: "Commit", commandPreview: preview)
-        runningActionID = action.id
-        schedulePresentation(of: action)
+        let action = Action(kind: .commit, title: "Commit", commandPreview: preview)
+        runningAction = action
 
         Task { @MainActor [weak self, weak action] in
             guard let self, let action else { return }
@@ -245,30 +270,41 @@ final class BranchesState {
         )
         let preview = "git " + invocation.arguments.joined(separator: " ")
         runAction(
+            kind: .createBranch,
             title: checkout ? "Create + switch to \(trimmed)" : "Create branch \(trimmed)",
             commandPreview: preview,
             invocation: invocation
         )
     }
 
+    /// Convenience used by the views to ask "is *this* particular action the
+    /// one in flight?" so each button can render its own spinner without
+    /// looking at the global `runningAction` and squinting at fields.
+    func isRunning(_ kind: Action.Kind) -> Bool {
+        runningAction?.kind == kind
+    }
+
+    /// True when any git action is in flight. Drives the global disable so
+    /// users can't queue a second action against the same working tree while
+    /// the first is mid-flight.
+    var isAnyActionRunning: Bool {
+        runningAction != nil
+    }
+
     private func runAction(
+        kind: Action.Kind,
         title: String,
         commandPreview: String,
         invocation: GitClient.ActionInvocation
     ) {
-        guard runningActionID == nil else {
-            // Only one action runs at a time — even with the sheet hidden we
-            // never want two concurrent git invocations against the same
-            // working tree.
+        guard runningAction == nil else {
+            // Only one action runs at a time — we never want two concurrent
+            // git invocations against the same working tree.
             return
         }
         guard let gitClient else { return }
-        let action = Action(title: title, commandPreview: commandPreview)
-        runningActionID = action.id
-
-        // Schedule deferred presentation. If the action is still running
-        // after the delay we surface the sheet so slow ops get live progress.
-        schedulePresentation(of: action)
+        let action = Action(kind: kind, title: title, commandPreview: commandPreview)
+        runningAction = action
 
         Task { @MainActor [weak self, weak action] in
             guard let self, let action else { return }
@@ -289,9 +325,6 @@ final class BranchesState {
                    let updated = dashboard.projects.first(where: { $0.id == self.project.id }) {
                     await dashboard.refreshHealth(for: updated)
                 }
-                // Success: dismiss the sheet if the delay already presented
-                // it; otherwise it never appears at all. Either way the user
-                // sees no popup for fast successful actions.
                 self.completeSuccessfully(action)
             } catch let GitClientError.dirtyWorkingTree(path) {
                 self.complete(
@@ -309,41 +342,17 @@ final class BranchesState {
         }
     }
 
-    /// Show the sheet only if the action is still running after
-    /// `sheetPresentationDelay`. Done as a fire-and-forget task because we
-    /// want the work task to keep running independently — the presentation
-    /// timer is purely a UX concern.
-    private func schedulePresentation(of action: Action) {
-        Task { @MainActor [weak self, weak action] in
-            try? await Task.sleep(for: Self.sheetPresentationDelay)
-            guard let self, let action else { return }
-            // Only present if (a) this is still the in-flight action and
-            // (b) it hasn't already finished. Fast successes will have
-            // cleared runningActionID before we get here.
-            guard self.runningActionID == action.id else { return }
-            guard !action.isFinished else { return }
-            self.activeAction = action
-        }
-    }
-
-    /// Success-path completion. Clears in-flight tracking and dismisses the
-    /// sheet if the delayed presentation ended up surfacing it. Fast
-    /// successes never set `activeAction` at all so this is a no-op for them.
+    /// Success path — clears the in-flight tracking. No modal is shown for
+    /// successes; the branch list and changed-file badge already updated.
     private func completeSuccessfully(_ action: Action) {
-        if runningActionID == action.id { runningActionID = nil }
-        if activeAction?.id == action.id { activeAction = nil }
+        if runningAction?.id == action.id { runningAction = nil }
     }
 
-    /// Failure-path completion. Forces the sheet open regardless of how long
-    /// the action took — the user needs to see the error and log even if the
-    /// command failed in 50 ms.
+    /// Failure path — clears the in-flight tracking and presents the modal
+    /// with the captured log so the user can read and copy the error.
     private func complete(_ action: Action, failure: String) {
         action.phase = .failed(message: failure)
-        if runningActionID == action.id { runningActionID = nil }
-        // Present the sheet if the delay hadn't fired yet so the failure
-        // never gets silently swallowed.
-        if activeAction?.id != action.id {
-            activeAction = action
-        }
+        if runningAction?.id == action.id { runningAction = nil }
+        activeAction = action
     }
 }
