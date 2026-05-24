@@ -485,6 +485,17 @@ struct GitClient: Sendable {
         )
     }
 
+    /// Delete a local branch. Uses the safe `-d` variant by default so git
+    /// refuses branches that haven't been merged. The force path is kept as
+    /// an explicit option for future recovery UX, not used by the first
+    /// remove-branch flow.
+    func deleteBranchAction(name: String, force: Bool = false) -> ActionInvocation {
+        ActionInvocation(
+            arguments: ["branch", force ? "-D" : "-d", name],
+            requiresCleanWorkingTree: false
+        )
+    }
+
     func switchAction(toLocal name: String) -> ActionInvocation {
         ActionInvocation(arguments: ["switch", name], requiresCleanWorkingTree: true)
     }

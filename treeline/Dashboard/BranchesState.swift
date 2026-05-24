@@ -34,6 +34,7 @@ final class BranchesState {
             case commit
             case createBranch
             case rename(branch: String)
+            case delete(branch: String)
             case switchBranch(listingID: String)
         }
 
@@ -266,6 +267,22 @@ final class BranchesState {
             kind: .rename(branch: oldName),
             title: "Rename \(oldName) → \(trimmed)",
             commandPreview: "git branch -m \(oldName) \(trimmed)",
+            invocation: invocation
+        )
+    }
+
+    /// Delete a local branch using git's safe `-d` variant. Current branches
+    /// are blocked by the view before this is called; git still remains the
+    /// final guard if repository state changes underneath us.
+    func runDelete(name: String) {
+        guard let gitClient else { return }
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        let invocation = gitClient.deleteBranchAction(name: trimmed)
+        runAction(
+            kind: .delete(branch: trimmed),
+            title: "Delete branch \(trimmed)",
+            commandPreview: "git branch -d \(trimmed)",
             invocation: invocation
         )
     }

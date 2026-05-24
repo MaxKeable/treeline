@@ -21,6 +21,10 @@ struct BranchesSection: View {
     /// the listing itself (not just a name) lets us show the original name in
     /// the sheet header without re-looking it up.
     @State private var branchPendingRename: BranchListing?
+    /// Local branch awaiting delete confirmation. Remote-tracking refs are
+    /// intentionally excluded from this flow; deleting remote branches is a
+    /// shared-repo action and needs separate UX.
+    @State private var branchPendingDelete: BranchListing?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -66,6 +70,18 @@ struct BranchesSection: View {
                     state.runRename(from: listing.shortName, to: newName)
                 }
             )
+        }
+        .alert("Delete Branch", isPresented: deleteAlertBinding) {
+            if let listing = branchPendingDelete {
+                Button("Delete Branch", role: .destructive) {
+                    state.runDelete(name: listing.shortName)
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            if let listing = branchPendingDelete {
+                Text("Delete local branch “\(listing.displayName)”? This does not delete \(remoteDisplayName(for: listing)).")
+            }
         }
         .sheet(isPresented: $isPresentingCommitSheet) {
             CommitSheet(
@@ -216,9 +232,14 @@ struct BranchesSection: View {
                             switchDisabledReason: switchDisabledReason(for: listing),
                             isSwitching: state.isRunning(.switchBranch(listingID: listing.id)),
                             isAnyActionRunning: state.isAnyActionRunning,
+                            isDeleteDisabled: deleteDisabled(for: listing),
+                            deleteDisabledReason: deleteDisabledReason(for: listing),
                             onSwitch: { state.runSwitch(to: listing) },
                             onRename: listing.kind == .local
                                 ? { branchPendingRename = listing }
+                                : nil,
+                            onDelete: listing.kind == .local
+                                ? { branchPendingDelete = listing }
                                 : nil
                         )
                         Divider()
@@ -262,6 +283,17 @@ struct BranchesSection: View {
         }
     }
 
+    private var deleteAlertBinding: Binding<Bool> {
+        Binding(
+            get: { branchPendingDelete != nil },
+            set: { isPresented in
+                if !isPresented {
+                    branchPendingDelete = nil
+                }
+            }
+        )
+    }
+
     private var commitDisabled: Bool {
         // Detached HEAD commits are technically valid but produce dangling
         // history that surprises users — block the action and explain why.
@@ -294,6 +326,21 @@ struct BranchesSection: View {
         }
         return nil
     }
+
+    private func deleteDisabled(for listing: BranchListing) -> Bool {
+        listing.isCurrent
+    }
+
+    private func deleteDisabledReason(for listing: BranchListing) -> String? {
+        listing.isCurrent ? "Switch to another branch before deleting this one." : nil
+    }
+
+    private func remoteDisplayName(for listing: BranchListing) -> String {
+        if let upstream = listing.upstream {
+            return upstream
+        }
+        return "origin/\(listing.shortName)"
+    }
 }
 
 /// One row in the branches list. Pulled out so we can attach hover state and
@@ -314,12 +361,15 @@ private struct BranchRow: View {
     /// blanket-disable other rows' Switch buttons so the user can't queue a
     /// second working-tree mutation against the same checkout.
     let isAnyActionRunning: Bool
+    let isDeleteDisabled: Bool
+    let deleteDisabledReason: String?
     let onSwitch: () -> Void
     /// `nil` when rename isn't supported for this row (i.e. remote-tracking
     /// refs). When present, surfaced both in the context menu and as an
     /// overflow menu next to the Switch button so the action is discoverable
     /// even for users who don't reach for right-click.
     let onRename: (() -> Void)?
+    let onDelete: (() -> Void)?
 
     var body: some View {
         HStack(spacing: 10) {
@@ -380,6 +430,12 @@ private struct BranchRow: View {
                 Menu {
                     Button("Rename…", action: onRename)
                         .disabled(isAnyActionRunning)
+                    if let onDelete {
+                        Divider()
+                        Button("Delete…", role: .destructive, action: onDelete)
+                            .disabled(isAnyActionRunning || isDeleteDisabled)
+                            .help(deleteDisabledReason ?? "Delete local branch \(listing.displayName)")
+                    }
                 } label: {
                     Image(systemName: "ellipsis")
                 }
@@ -396,6 +452,10 @@ private struct BranchRow: View {
         .contextMenu {
             if let onRename {
                 Button("Rename “\(listing.displayName)”…", action: onRename)
+            }
+            if let onDelete {
+                Button("Delete “\(listing.displayName)”…", role: .destructive, action: onDelete)
+                    .disabled(isAnyActionRunning || isDeleteDisabled)
             }
         }
     }

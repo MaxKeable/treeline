@@ -353,4 +353,20 @@ struct GitClientTests {
         let expected = GitClient.canonicalize(checkout.appendingPathComponent(".git"))
         #expect(identity.commonDirectory.path == expected.path)
     }
+
+    @Test func deleteBranchActionUsesSafeDeleteByDefault() {
+        let client = GitClient(runner: FakeCLIRunner())
+        let action = client.deleteBranchAction(name: "feature/remove")
+
+        #expect(action.arguments == ["branch", "-d", "feature/remove"])
+        #expect(action.requiresCleanWorkingTree == false)
+    }
+
+    @Test func deleteBranchActionCanForceDeleteWhenExplicitlyRequested() {
+        let client = GitClient(runner: FakeCLIRunner())
+        let action = client.deleteBranchAction(name: "feature/remove", force: true)
+
+        #expect(action.arguments == ["branch", "-D", "feature/remove"])
+        #expect(action.requiresCleanWorkingTree == false)
+    }
 }
