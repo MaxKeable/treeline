@@ -119,34 +119,8 @@ struct ProjectDetailView: View {
 
     private func select(_ path: String) async {
         guard let state else { return }
-        do {
-            _ = try await state.changePrimaryCheckout(
-                project,
-                to: URL(fileURLWithPath: path)
-            )
-            if let updated = state.projects.first(where: { $0.id == project.id }) {
-                await state.refreshHealth(for: updated)
-            }
-        } catch let error as ProjectsDashboardState.ChangePrimaryCheckoutError {
-            changePrimaryError = message(for: error)
-        } catch {
-            changePrimaryError = String(describing: error)
-        }
-    }
-
-    private func message(for error: ProjectsDashboardState.ChangePrimaryCheckoutError) -> String {
-        switch error {
-        case .notConfigured:
-            return "Treeline isn't configured to access git, so the primary checkout can't be changed."
-        case .projectNotFound:
-            return "That Project is no longer tracked."
-        case .unknownCheckout(let path):
-            return "“\(path)” isn't one of this Project's known checkouts."
-        case .missingFolder(let path):
-            return "“\(path)” no longer exists on disk."
-        case .repositoryMismatch(let message):
-            return message
-        }
+        changePrimaryError = await DashboardCoordinator(state: state)
+            .changePrimaryCheckout(project, to: path)
     }
 }
 
